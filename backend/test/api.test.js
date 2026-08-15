@@ -389,11 +389,11 @@ test('FAZ2+3: uygunsuzluk açma-kapama tam döngüsü (red + tekrar + onay)', as
   // Yetkisiz kullanıcı (uygunsuzluk_acma yok) açamaz
   const forbiddenCreate = await api('POST', '/nonconformities', {
     token: assigneeToken,
-    body: { assignedUserId: assigneeId, description: 'test', dueDate: new Date(Date.now() + 86400000).toISOString() },
+    body: { assignedUserIds: [assigneeId], description: 'test', dueDate: new Date(Date.now() + 86400000).toISOString() },
   });
   assert.equal(forbiddenCreate.status, 403);
 
-  // Uygunsuzluk açılır
+  // Uygunsuzluk açılır (birden fazla kişiye atanabilir)
   const dueDate = new Date(Date.now() + 7 * 86400000).toISOString();
   const createNc = await api('POST', '/nonconformities', {
     token: openerToken,
@@ -401,7 +401,7 @@ test('FAZ2+3: uygunsuzluk açma-kapama tam döngüsü (red + tekrar + onay)', as
       categoryId,
       blockId,
       companyId,
-      assignedUserId: assigneeId,
+      assignedUserIds: [assigneeId, approverId],
       description: 'Merdiven korkuluğu eksik.',
       priority: 'YUKSEK',
       dueDate,
@@ -412,10 +412,25 @@ test('FAZ2+3: uygunsuzluk açma-kapama tam döngüsü (red + tekrar + onay)', as
   assert.match(createNc.body.nonconformity.number, /^\d{4}-TST-002-\d{6}$/);
   assert.equal(createNc.body.nonconformity.status, 'ACIK');
 
+  // Detayda her iki atanan kişi de görünmeli
+  const ncDetail = await api('GET', `/nonconformities/${ncId}`, { token: openerToken });
+  assert.equal(ncDetail.status, 200);
+  const assigneeUserIds = ncDetail.body.nonconformity.assignees.map((a) => a.userId);
+  assert.ok(assigneeUserIds.includes(assigneeId));
+  assert.ok(assigneeUserIds.includes(approverId));
+
   // Atanan kişi listede kendi uygunsuzluğunu görür (uygunsuzluk_gorme yetkisi olmasa bile)
   const assigneeList = await api('GET', '/nonconformities', { token: assigneeToken });
   assert.equal(assigneeList.status, 200);
   assert.ok(assigneeList.body.nonconformities.some((n) => n.id === ncId));
+
+  // Atanan kişiye bildirim gitmiş olmalı
+  const assigneeNotifications = await api('GET', '/notifications', { token: assigneeToken });
+  assert.equal(assigneeNotifications.status, 200);
+  assert.ok(assigneeNotifications.body.notifications.some((n) => n.nonconformityId === ncId && !n.isRead));
+
+  const unreadCountRes = await api('GET', '/notifications/unread-count', { token: assigneeToken });
+  assert.ok(unreadCountRes.body.count >= 1);
 
   // Atanan kişi düzeltme gönderir
   const correction1 = await api('POST', `/nonconformities/${ncId}/corrections`, {

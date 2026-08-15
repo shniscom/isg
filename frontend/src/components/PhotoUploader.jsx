@@ -6,7 +6,7 @@ import { Alert, Spinner } from './ui';
  * Seçilen fotoğrafları önce backend'den alınan presigned URL ile doğrudan Cloudflare R2'ye
  * yükler (sunucu diskinden hiç geçmez), sonra elde edilen object key'leri parent'a bildirir.
  */
-export function PhotoUploader({ photos, onChange, disabled, label = 'Fotoğraf Ekle' }) {
+export function PhotoUploader({ photos, onChange, disabled }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -44,6 +44,10 @@ export function PhotoUploader({ photos, onChange, disabled, label = 'Fotoğraf E
     onChange((photos || []).filter((p) => p.key !== key));
   }
 
+  const inputBaseClass = `flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 px-4 py-3 text-sm font-medium text-slate-600 transition hover:border-brand-400 hover:bg-brand-50 ${
+    disabled || uploading ? 'pointer-events-none opacity-50' : 'cursor-pointer'
+  }`;
+
   return (
     <div>
       {error && (
@@ -51,31 +55,49 @@ export function PhotoUploader({ photos, onChange, disabled, label = 'Fotoğraf E
           <Alert>{error}</Alert>
         </div>
       )}
-      <label
-        className={`flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 px-4 py-3 text-sm font-medium text-slate-600 transition hover:border-brand-400 hover:bg-brand-50 ${
-          disabled || uploading ? 'pointer-events-none opacity-50' : 'cursor-pointer'
-        }`}
-      >
-        {uploading ? (
-          <>
-            <Spinner className="h-4 w-4" /> Yükleniyor...
-          </>
-        ) : (
-          <>📷 {label}</>
-        )}
-        <input
-          type="file"
-          accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
-          multiple
-          capture="environment"
-          className="hidden"
-          disabled={disabled || uploading}
-          onChange={(e) => {
-            handleFiles(e.target.files);
-            e.target.value = '';
-          }}
-        />
-      </label>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <label className={inputBaseClass}>
+          {uploading ? (
+            <>
+              <Spinner className="h-4 w-4" /> Yükleniyor...
+            </>
+          ) : (
+            <>📷 Kamera ile Çek</>
+          )}
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+            multiple
+            capture="environment"
+            className="hidden"
+            disabled={disabled || uploading}
+            onChange={(e) => {
+              handleFiles(e.target.files);
+              e.target.value = '';
+            }}
+          />
+        </label>
+        <label className={inputBaseClass}>
+          {uploading ? (
+            <>
+              <Spinner className="h-4 w-4" /> Yükleniyor...
+            </>
+          ) : (
+            <>🖼️ Galeriden Seç</>
+          )}
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+            multiple
+            className="hidden"
+            disabled={disabled || uploading}
+            onChange={(e) => {
+              handleFiles(e.target.files);
+              e.target.value = '';
+            }}
+          />
+        </label>
+      </div>
 
       {(photos || []).length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">

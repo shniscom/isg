@@ -138,10 +138,14 @@ const userProjects = pgTable('user_projects', {
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   roleId: text('role_id').notNull().references(() => roles.id),
+  // Boş ise atama projenin tamamını kapsar (ör. Ana Firma / Genel). Doluysa atama yalnızca
+  // o firmaya özeldir (ör. "B taşeronunun İSG uzmanı"). Aynı kullanıcı aynı projede farklı
+  // firma + görev kombinasyonlarına sahip olabilir.
+  companyId: text('company_id').references(() => companies.id, { onDelete: 'cascade' }),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
-  uniqueIndex('user_projects_unique_idx').on(table.userId, table.projectId, table.roleId),
+  uniqueIndex('user_projects_unique_idx').on(table.userId, table.projectId, table.roleId, table.companyId),
 ]);
 
 const userPermissions = pgTable('user_permissions', {
@@ -187,7 +191,6 @@ const nonconformities = pgTable('nonconformities', {
   blockId: text('block_id').references(() => projectBlocks.id, { onDelete: 'set null' }),
   companyId: text('company_id').references(() => companies.id, { onDelete: 'set null' }), // sorumlu firma
   openedById: text('opened_by_id').notNull().references(() => users.id),
-  assignedUserId: text('assigned_user_id').notNull().references(() => users.id), // atanan kişi
   description: text('description').notNull(),
   priority: nonconformityPriorityEnum('priority').notNull().default('ORTA'),
   status: nonconformityStatusEnum('status').notNull().default('ACIK'),
@@ -198,7 +201,20 @@ const nonconformities = pgTable('nonconformities', {
 }, (table) => [
   uniqueIndex('nonconformities_number_idx').on(table.number),
   index('nonconformities_project_status_idx').on(table.projectId, table.status),
-  index('nonconformities_assigned_idx').on(table.assignedUserId),
+]);
+
+/**
+ * Bir uygunsuzluğa atanan kişiler (çoklu atama desteklenir). Atananlardan herhangi biri
+ * düzeltme gönderebilir.
+ */
+const nonconformityAssignees = pgTable('nonconformity_assignees', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  nonconformityId: text('nonconformity_id').notNull().references(() => nonconformities.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('nonconformity_assignees_unique_idx').on(table.nonconformityId, table.userId),
+  index('nonconformity_assignees_user_idx').on(table.userId),
 ]);
 
 /**
@@ -237,6 +253,21 @@ const nonconformityPhotos = pgTable('nonconformity_photos', {
 ]);
 
 /**
+ * Kullanıcıya yönelik uygulama içi bildirimler (ör. "size bir uygunsuzluk atandı").
+ */
+const notifications = pgTable('notifications', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  nonconformityId: text('nonconformity_id').references(() => nonconformities.id, { onDelete: 'cascade' }),
+  title: text('title').notNull(),
+  message: text('message').notNull(),
+  isRead: boolean('is_read').notNull().default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('notifications_user_idx').on(table.userId, table.isRead),
+]);
+
+/**
  * Uygunsuzluğun değiştirilemez işlem geçmişi (tarihçe). Her durum değişikliğinde bir satır eklenir.
  */
 const nonconformityStatusHistory = pgTable('nonconformity_status_history', {
@@ -258,7 +289,8 @@ const usersRelations = relations(users, ({ many }) => ({
   userPermissions: many(userPermissions),
   auditLogs: many(auditLogs),
   openedNonconformities: many(nonconformities, { relationName: 'openedBy' }),
-  assignedNonconformities: many(nonconformities, { relationName: 'assignedTo' }),
+  nonconformityAssignments: many(nonconformityAssignees),
+  notifications: many(notifications),
 }));
 
 const projectsRelations = relations(projects, ({ many }) => ({
@@ -278,6 +310,7 @@ const companiesRelations = relations(companies, ({ one, many }) => ({
   project: one(projects, { fields: [companies.projectId], references: [projects.id] }),
   responsibleBlock: one(projectBlocks, { fields: [companies.responsibleBlockId], references: [projectBlocks.id] }),
   companyUsers: many(companyUsers),
+  userProjects: many(userProjects),
 }));
 
 const companyUsersRelations = relations(companyUsers, ({ one }) => ({
@@ -297,6 +330,7 @@ const userProjectsRelations = relations(userProjects, ({ one }) => ({
   user: one(users, { fields: [userProjects.userId], references: [users.id] }),
   project: one(projects, { fields: [userProjects.projectId], references: [projects.id] }),
   role: one(roles, { fields: [userProjects.roleId], references: [roles.id] }),
+  company: one(companies, { fields: [userProjects.companyId], references: [companies.id] }),
 }));
 
 const userPermissionsRelations = relations(userPermissions, ({ one }) => ({
@@ -319,10 +353,15 @@ const nonconformitiesRelations = relations(nonconformities, ({ one, many }) => (
   block: one(projectBlocks, { fields: [nonconformities.blockId], references: [projectBlocks.id] }),
   company: one(companies, { fields: [nonconformities.companyId], references: [companies.id] }),
   openedBy: one(users, { fields: [nonconformities.openedById], references: [users.id], relationName: 'openedBy' }),
-  assignedUser: one(users, { fields: [nonconformities.assignedUserId], references: [users.id], relationName: 'assignedTo' }),
+  assignees: many(nonconformityAssignees),
   photos: many(nonconformityPhotos),
   corrections: many(nonconformityCorrections),
   history: many(nonconformityStatusHistory),
+}));
+
+const nonconformityAssigneesRelations = relations(nonconformityAssignees, ({ one }) => ({
+  nonconformity: one(nonconformities, { fields: [nonconformityAssignees.nonconformityId], references: [nonconformities.id] }),
+  user: one(users, { fields: [nonconformityAssignees.userId], references: [users.id] }),
 }));
 
 const nonconformityCorrectionsRelations = relations(nonconformityCorrections, ({ one, many }) => ({
@@ -341,6 +380,11 @@ const nonconformityPhotosRelations = relations(nonconformityPhotos, ({ one }) =>
 const nonconformityStatusHistoryRelations = relations(nonconformityStatusHistory, ({ one }) => ({
   nonconformity: one(nonconformities, { fields: [nonconformityStatusHistory.nonconformityId], references: [nonconformities.id] }),
   actor: one(users, { fields: [nonconformityStatusHistory.actorId], references: [users.id] }),
+}));
+
+const notificationsRelations = relations(notifications, ({ one }) => ({
+  user: one(users, { fields: [notifications.userId], references: [users.id] }),
+  nonconformity: one(nonconformities, { fields: [notifications.nonconformityId], references: [nonconformities.id] }),
 }));
 
 module.exports = {
@@ -362,6 +406,8 @@ module.exports = {
   categories,
   auditLogs,
   nonconformities,
+  nonconformityAssignees,
+  notifications,
   nonconformityCorrections,
   nonconformityPhotos,
   nonconformityStatusHistory,
@@ -377,6 +423,8 @@ module.exports = {
   categoriesRelations,
   auditLogsRelations,
   nonconformitiesRelations,
+  nonconformityAssigneesRelations,
+  notificationsRelations,
   nonconformityCorrectionsRelations,
   nonconformityPhotosRelations,
   nonconformityStatusHistoryRelations,

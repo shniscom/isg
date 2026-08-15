@@ -19,12 +19,12 @@ export function NewNonconformityPage() {
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [photos, setPhotos] = useState([]);
+  const [assignedUserIds, setAssignedUserIds] = useState([]);
 
   const [form, setForm] = useState({
     categoryId: '',
     blockId: '',
     companyId: '',
-    assignedUserId: '',
     description: '',
     priority: 'ORTA',
     dueDate: defaultDueDate(),
@@ -43,8 +43,8 @@ export function NewNonconformityPage() {
     e.preventDefault();
     setError(null);
 
-    if (!form.assignedUserId) {
-      setError('Atanan kişi seçilmelidir.');
+    if (assignedUserIds.length === 0) {
+      setError('En az bir atanan kişi seçilmelidir.');
       return;
     }
 
@@ -55,6 +55,7 @@ export function NewNonconformityPage() {
         categoryId: form.categoryId || null,
         blockId: form.blockId || null,
         companyId: form.companyId || null,
+        assignedUserIds,
         dueDate: new Date(form.dueDate).toISOString(),
         photos: photos.map((p) => ({ key: p.key, originalFileName: p.originalFileName })),
       });
@@ -113,20 +114,6 @@ export function NewNonconformityPage() {
               ))}
             </Select>
 
-            <Select
-              label="Atanan Kişi"
-              value={form.assignedUserId}
-              onChange={(e) => setForm({ ...form, assignedUserId: e.target.value })}
-              required
-            >
-              <option value="">Seçiniz</option>
-              {users?.map((u) => (
-                <option key={u.userId} value={u.userId}>
-                  {u.fullName} — {u.roleName}
-                </option>
-              ))}
-            </Select>
-
             <Select label="Öncelik" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
               {Object.entries(PRIORITY_LABELS).map(([value, label]) => (
                 <option key={value} value={value}>
@@ -145,6 +132,32 @@ export function NewNonconformityPage() {
                 required
               />
             </label>
+          </div>
+
+          <div>
+            <span className="mb-1.5 block text-sm font-medium text-slate-700">Atanan Kişi(ler)</span>
+            {users && users.length === 0 && (
+              <p className="text-sm text-slate-400">Bu projede atanabilir kullanıcı yok.</p>
+            )}
+            <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-slate-300 p-2">
+              {users?.map((u) => (
+                <label key={u.userId} className="flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 hover:bg-slate-50">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-slate-300 text-brand-700 focus:ring-brand-500"
+                    checked={assignedUserIds.includes(u.userId)}
+                    onChange={() =>
+                      setAssignedUserIds((prev) =>
+                        prev.includes(u.userId) ? prev.filter((id) => id !== u.userId) : [...prev, u.userId]
+                      )
+                    }
+                  />
+                  <span className="text-sm text-slate-800">
+                    {u.fullName} — {u.roleName}
+                  </span>
+                </label>
+              ))}
+            </div>
           </div>
 
           <div>

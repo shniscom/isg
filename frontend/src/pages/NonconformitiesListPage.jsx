@@ -122,7 +122,7 @@ export function NonconformitiesListPage() {
                       {n.categoryName && <span>🏷️ {n.categoryName}</span>}
                       {n.blockName && <span>📍 {n.blockName}</span>}
                       {n.companyName && <span>🏢 {n.companyName}</span>}
-                      <span>👤 {n.assignedUserName}</span>
+                      <span>👤 {(n.assignees || []).map((a) => a.fullName).join(', ') || '—'}</span>
                       <span>📅 {formatDate(n.dueDate)}</span>
                     </div>
                   </div>

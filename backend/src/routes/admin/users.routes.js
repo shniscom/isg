@@ -2,8 +2,8 @@ const express = require('express');
 const crypto = require('crypto');
 const { z } = require('zod');
 const { db } = require('../../db/client');
-const { users, userProjects, userPermissions, projects, roles, permissions } = require('../../db/schema');
-const { eq, and } = require('drizzle-orm');
+const { users, userProjects, userPermissions, projects, roles, permissions, companies } = require('../../db/schema');
+const { eq, and, isNull } = require('drizzle-orm');
 const { asyncHandler } = require('../../utils/asyncHandler');
 const { ApiError } = require('../../utils/apiError');
 const { requirePermission } = require('../../middleware/permission');
@@ -91,11 +91,14 @@ router.get(
         projectName: projects.name,
         roleId: roles.id,
         roleName: roles.name,
+        companyId: companies.id,
+        companyName: companies.name,
         isActive: userProjects.isActive,
       })
       .from(userProjects)
       .innerJoin(projects, eq(userProjects.projectId, projects.id))
       .innerJoin(roles, eq(userProjects.roleId, roles.id))
+      .leftJoin(companies, eq(userProjects.companyId, companies.id))
       .where(eq(userProjects.userId, user.id));
 
     const grantedPermissions = await db
@@ -157,6 +160,9 @@ router.post(
 const assignProjectSchema = z.object({
   projectId: z.string().min(1),
   roleId: z.string().min(1),
+  // Boş/undefined ise atama tüm proje kapsamındadır (Ana Firma / Genel).
+  // Doluysa atama yalnızca belirtilen firmaya özeldir.
+  companyId: z.string().min(1).optional().nullable(),
 });
 
 router.post(
@@ -165,6 +171,17 @@ router.post(
     const parsed = assignProjectSchema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz istek.', parsed.error.flatten());
 
+    const companyId = parsed.data.companyId || null;
+
+    if (companyId) {
+      const [company] = await db
+        .select()
+        .from(companies)
+        .where(and(eq(companies.id, companyId), eq(companies.projectId, parsed.data.projectId)))
+        .limit(1);
+      if (!company) throw ApiError.badRequest('Firma bu projeye ait değil.');
+    }
+
     const duplicate = await db
       .select()
       .from(userProjects)
@@ -172,15 +189,16 @@ router.post(
         and(
           eq(userProjects.userId, req.params.id),
           eq(userProjects.projectId, parsed.data.projectId),
-          eq(userProjects.roleId, parsed.data.roleId)
+          eq(userProjects.roleId, parsed.data.roleId),
+          companyId ? eq(userProjects.companyId, companyId) : isNull(userProjects.companyId)
         )
       )
       .limit(1);
-    if (duplicate.length > 0) throw ApiError.conflict('Bu kullanıcı bu proje/görev kombinasyonuna zaten atanmış.');
+    if (duplicate.length > 0) throw ApiError.conflict('Bu kullanıcı bu proje/görev/firma kombinasyonuna zaten atanmış.');
 
     const [created] = await db
       .insert(userProjects)
-      .values({ userId: req.params.id, projectId: parsed.data.projectId, roleId: parsed.data.roleId })
+      .values({ userId: req.params.id, projectId: parsed.data.projectId, roleId: parsed.data.roleId, companyId })
       .returning();
 
     await logAudit({ userId: req.user.sub, action: 'USER_PROJECT_ASSIGN', entityType: 'user_project', entityId: created.id, details: parsed.data, ipAddress: req.ip });

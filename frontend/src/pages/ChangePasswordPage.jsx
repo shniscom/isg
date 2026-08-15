@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Button, Input, Alert, Card } from '../components/ui';
+import { Button, PasswordInput, Alert, Card } from '../components/ui';
 
 export function ChangePasswordPage() {
   const { changePassword, error, clearError, logout } = useAuth();
@@ -38,25 +38,22 @@ export function ChangePasswordPage() {
         <Card>
           <form onSubmit={handleSubmit} className="space-y-4">
             {(error || localError) && <Alert>{localError || error}</Alert>}
-            <Input
+            <PasswordInput
               label="Mevcut (Geçici) Şifre"
-              type="password"
               value={currentPassword}
               onChange={(e) => setCurrentPassword(e.target.value)}
               required
               autoFocus
             />
-            <Input
+            <PasswordInput
               label="Yeni Şifre"
-              type="password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               minLength={8}
               required
             />
-            <Input
+            <PasswordInput
               label="Yeni Şifre (Tekrar)"
-              type="password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               minLength={8}

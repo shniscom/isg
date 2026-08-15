@@ -78,6 +78,28 @@ birini degerlendirebilirsiniz:
 Bu adimlar opsiyoneldir; uygulamanin kendi icinde zaten tam bir kimlik dogrulama
 ve yetkilendirme katmani bulunmaktadir.
 
+## 5b. Cloudflare R2 (Fotograf Depolama) CORS Ayari
+
+Fotograflar tarayicidan dogrudan Cloudflare R2'ye (backend'e ugramadan) presigned URL ile
+yuklenir. Bu nedenle R2 bucket'inda **CORS Policy** tanimli olmazsa fotograf yukleme
+`Failed to fetch` hatasi verir. Cloudflare panelinde R2 -> ilgili bucket -> Settings ->
+CORS Policy bolumune su kurali ekleyin:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://isg.shnai.cloud"],
+    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+Ayrica `docker-compose.yml` artik `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` degiskenlerini zorunlu kilar (`:?` sozdizimi);
+bunlar Coolify Environment Variables bolumune eklenmeden deploy basarisiz olur.
+
 ## 6. Yedekleme
 
 `postgres` verisi `isg_postgres_data` adli bir Docker volume icinde tutulur. Coolify

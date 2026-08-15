@@ -1,9 +1,10 @@
 const express = require('express');
 const { z } = require('zod');
-const { eq, and, or, desc, gte, lte, ilike, isNull } = require('drizzle-orm');
+const { eq, and, or, desc, gte, lte, ilike, isNull, inArray } = require('drizzle-orm');
 const { db } = require('../db/client');
 const {
   nonconformities,
+  nonconformityAssignees,
   nonconformityPhotos,
   nonconformityCorrections,
   nonconformityStatusHistory,
@@ -15,6 +16,7 @@ const {
   userProjects,
   roles,
 } = require('../db/schema');
+const { createNotification, createNotifications } = require('../services/notification.service');
 const { requireAuth } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permission');
 const { asyncHandler } = require('../utils/asyncHandler');
@@ -68,6 +70,32 @@ async function withPhotoViewUrls(photos) {
   return Promise.all(
     photos.map(async (p) => ({ ...p, viewUrl: await createViewUrl(p.objectKey).catch(() => null) }))
   );
+}
+
+/**
+ * Verilen uygunsuzluk id listesi için atanan kişileri toplu olarak yükler ve id'ye göre gruplar.
+ * Bir transaction (tx) içinden çağrılıyorsa mutlaka `executor` olarak `tx` verilmelidir; aksi halde
+ * PGlite/Postgres üzerinde ayrı bir bağlantıdan sorgu açılıp aynı transaction'ı bekleterek kilitlenmeye
+ * (deadlock) yol açabilir.
+ */
+async function loadAssigneesFor(nonconformityIds, executor = db) {
+  if (!nonconformityIds || nonconformityIds.length === 0) return {};
+  const rows = await executor
+    .select({
+      nonconformityId: nonconformityAssignees.nonconformityId,
+      userId: users.id,
+      fullName: users.fullName,
+    })
+    .from(nonconformityAssignees)
+    .innerJoin(users, eq(nonconformityAssignees.userId, users.id))
+    .where(inArray(nonconformityAssignees.nonconformityId, nonconformityIds));
+
+  const grouped = {};
+  for (const row of rows) {
+    if (!grouped[row.nonconformityId]) grouped[row.nonconformityId] = [];
+    grouped[row.nonconformityId].push({ userId: row.userId, fullName: row.fullName });
+  }
+  return grouped;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,20 +160,34 @@ router.get(
 
     if (!canSeeAll && !req.user.isSystemAdmin) {
       // Genel görme yetkisi yoksa yalnızca kendi açtığı veya kendisine atanan kayıtları görebilir.
-      conditions.push(or(eq(nonconformities.assignedUserId, req.user.sub), eq(nonconformities.openedById, req.user.sub)));
+      const myAssignments = await db
+        .select({ nonconformityId: nonconformityAssignees.nonconformityId })
+        .from(nonconformityAssignees)
+        .where(eq(nonconformityAssignees.userId, req.user.sub));
+      const myAssignedIds = myAssignments.map((a) => a.nonconformityId);
+      conditions.push(
+        myAssignedIds.length > 0
+          ? or(inArray(nonconformities.id, myAssignedIds), eq(nonconformities.openedById, req.user.sub))
+          : eq(nonconformities.openedById, req.user.sub)
+      );
     }
 
     if (req.query.status) conditions.push(eq(nonconformities.status, req.query.status));
     if (req.query.categoryId) conditions.push(eq(nonconformities.categoryId, req.query.categoryId));
     if (req.query.blockId) conditions.push(eq(nonconformities.blockId, req.query.blockId));
     if (req.query.companyId) conditions.push(eq(nonconformities.companyId, req.query.companyId));
-    if (req.query.assignedUserId) conditions.push(eq(nonconformities.assignedUserId, req.query.assignedUserId));
+    if (req.query.assignedUserId) {
+      const filterRows = await db
+        .select({ nonconformityId: nonconformityAssignees.nonconformityId })
+        .from(nonconformityAssignees)
+        .where(eq(nonconformityAssignees.userId, req.query.assignedUserId));
+      const filterIds = filterRows.map((r) => r.nonconformityId);
+      conditions.push(filterIds.length > 0 ? inArray(nonconformities.id, filterIds) : eq(nonconformities.id, '__none__'));
+    }
     if (req.query.openedById) conditions.push(eq(nonconformities.openedById, req.query.openedById));
     if (req.query.search) conditions.push(ilike(nonconformities.number, `%${req.query.search}%`));
     if (req.query.dateFrom) conditions.push(gte(nonconformities.createdAt, new Date(req.query.dateFrom)));
     if (req.query.dateTo) conditions.push(lte(nonconformities.createdAt, new Date(req.query.dateTo)));
-
-    const openedByUsers = users; // alias yardımcı referans (okunabilirlik için)
 
     const rows = await db
       .select({
@@ -160,19 +202,19 @@ router.get(
         categoryName: categories.name,
         blockName: projectBlocks.name,
         companyName: companies.name,
-        assignedUserId: nonconformities.assignedUserId,
-        assignedUserName: users.fullName,
         openedById: nonconformities.openedById,
       })
       .from(nonconformities)
       .leftJoin(categories, eq(nonconformities.categoryId, categories.id))
       .leftJoin(projectBlocks, eq(nonconformities.blockId, projectBlocks.id))
       .leftJoin(companies, eq(nonconformities.companyId, companies.id))
-      .leftJoin(users, eq(nonconformities.assignedUserId, users.id))
       .where(and(...conditions))
       .orderBy(desc(nonconformities.createdAt));
 
-    res.json({ nonconformities: rows });
+    const assigneesByNc = await loadAssigneesFor(rows.map((r) => r.id));
+    const rowsWithAssignees = rows.map((r) => ({ ...r, assignees: assigneesByNc[r.id] || [] }));
+
+    res.json({ nonconformities: rowsWithAssignees });
   })
 );
 
@@ -184,7 +226,7 @@ const createSchema = z.object({
   categoryId: z.string().optional().nullable(),
   blockId: z.string().optional().nullable(),
   companyId: z.string().optional().nullable(),
-  assignedUserId: z.string().min(1, 'Atanan kişi zorunludur.'),
+  assignedUserIds: z.array(z.string().min(1)).min(1, 'En az bir atanan kişi seçilmelidir.'),
   description: z.string().min(5, 'Açıklama en az 5 karakter olmalıdır.'),
   priority: z.enum(['DUSUK', 'ORTA', 'YUKSEK', 'KRITIK']).default('ORTA'),
   dueDate: z.string().datetime({ message: 'Geçerli bir termin tarihi giriniz.' }),
@@ -205,13 +247,21 @@ router.post(
       throw ApiError.badRequest('Termin tarihi bugünden ileri bir tarih olmalıdır.');
     }
 
-    const assignment = await db
-      .select()
+    const uniqueAssignedUserIds = [...new Set(data.assignedUserIds)];
+    const assignedMembers = await db
+      .select({ userId: userProjects.userId })
       .from(userProjects)
-      .where(and(eq(userProjects.userId, data.assignedUserId), eq(userProjects.projectId, projectId), eq(userProjects.isActive, true)))
-      .limit(1);
-    if (assignment.length === 0) {
-      throw ApiError.badRequest('Atanan kullanıcı bu projeye atanmamış veya pasif.');
+      .where(
+        and(
+          inArray(userProjects.userId, uniqueAssignedUserIds),
+          eq(userProjects.projectId, projectId),
+          eq(userProjects.isActive, true)
+        )
+      );
+    const validAssignedIds = new Set(assignedMembers.map((m) => m.userId));
+    const invalidIds = uniqueAssignedUserIds.filter((uid) => !validAssignedIds.has(uid));
+    if (invalidIds.length > 0) {
+      throw ApiError.badRequest('Atanan kullanıcılardan bazıları bu projeye atanmamış veya pasif.');
     }
 
     const result = await db.transaction(async (tx) => {
@@ -226,12 +276,15 @@ router.post(
           blockId: data.blockId || null,
           companyId: data.companyId || null,
           openedById: req.user.sub,
-          assignedUserId: data.assignedUserId,
           description: data.description,
           priority: data.priority,
           dueDate,
         })
         .returning();
+
+      await tx.insert(nonconformityAssignees).values(
+        uniqueAssignedUserIds.map((userId) => ({ nonconformityId: created.id, userId }))
+      );
 
       await attachPhotos(tx, {
         nonconformityId: created.id,
@@ -247,6 +300,13 @@ router.post(
         note: 'Uygunsuzluk oluşturuldu.',
       });
 
+      await createNotifications(tx, {
+        userIds: uniqueAssignedUserIds,
+        nonconformityId: created.id,
+        title: 'Size bir uygunsuzluk atandı',
+        message: `${created.number} numaralı uygunsuzluk size atandı.`,
+      });
+
       return created;
     });
 
@@ -255,7 +315,7 @@ router.post(
       action: 'NONCONFORMITY_CREATE',
       entityType: 'nonconformity',
       entityId: result.id,
-      details: { number: result.number, assignedUserId: data.assignedUserId },
+      details: { number: result.number, assignedUserIds: uniqueAssignedUserIds },
       ipAddress: req.ip,
     });
 
@@ -272,20 +332,22 @@ router.get(
     const [nc] = await db.select().from(nonconformities).where(eq(nonconformities.id, req.params.id)).limit(1);
     if (!nc) throw ApiError.notFound('Uygunsuzluk bulunamadı.');
 
+    const assigneesByNc = await loadAssigneesFor([nc.id]);
+    const assignees = assigneesByNc[nc.id] || [];
+
     if (!req.user.isSystemAdmin) {
       if (nc.projectId !== req.user.projectId) throw ApiError.forbidden();
       const canSeeAll = hasPermission(req, 'uygunsuzluk_gorme');
-      const isOwnerOrAssignee = nc.assignedUserId === req.user.sub || nc.openedById === req.user.sub;
+      const isOwnerOrAssignee = assignees.some((a) => a.userId === req.user.sub) || nc.openedById === req.user.sub;
       if (!canSeeAll && !isOwnerOrAssignee) throw ApiError.forbidden();
     }
 
-    const [project, category, block, company, openedBy, assignedUser] = await Promise.all([
+    const [project, category, block, company, openedBy] = await Promise.all([
       db.select().from(projects).where(eq(projects.id, nc.projectId)).limit(1).then((r) => r[0]),
       nc.categoryId ? db.select().from(categories).where(eq(categories.id, nc.categoryId)).limit(1).then((r) => r[0]) : null,
       nc.blockId ? db.select().from(projectBlocks).where(eq(projectBlocks.id, nc.blockId)).limit(1).then((r) => r[0]) : null,
       nc.companyId ? db.select().from(companies).where(eq(companies.id, nc.companyId)).limit(1).then((r) => r[0]) : null,
       db.select().from(users).where(eq(users.id, nc.openedById)).limit(1).then((r) => r[0]),
-      db.select().from(users).where(eq(users.id, nc.assignedUserId)).limit(1).then((r) => r[0]),
     ]);
 
     const photosRaw = await db.select().from(nonconformityPhotos).where(eq(nonconformityPhotos.nonconformityId, nc.id));
@@ -336,7 +398,7 @@ router.get(
         blockName: block?.name || null,
         companyName: company?.name || null,
         openedByName: openedBy?.fullName,
-        assignedUserName: assignedUser?.fullName,
+        assignees,
       },
       photos,
       corrections,
@@ -363,9 +425,10 @@ router.post(
     if (!nc) throw ApiError.notFound('Uygunsuzluk bulunamadı.');
     if (!req.user.isSystemAdmin && nc.projectId !== req.user.projectId) throw ApiError.forbidden();
 
-    const isAssignee = nc.assignedUserId === req.user.sub;
+    const assigneesByNc = await loadAssigneesFor([nc.id]);
+    const isAssignee = (assigneesByNc[nc.id] || []).some((a) => a.userId === req.user.sub);
     if (!isAssignee && !hasPermission(req, 'uygunsuzluk_duzeltme')) {
-      throw ApiError.forbidden('Bu uygunsuzluğu yalnızca atanan kişi düzeltebilir.');
+      throw ApiError.forbidden('Bu uygunsuzluğu yalnızca atanan kişilerden biri düzeltebilir.');
     }
     if (nc.status !== 'ACIK') {
       throw ApiError.conflict('Bu uygunsuzluk düzeltme göndermeye uygun durumda değil (durum: ' + nc.status + ').');
@@ -393,6 +456,15 @@ router.post(
         actorId: req.user.sub,
         note: 'Düzeltme onaya gönderildi.',
       });
+
+      if (nc.openedById !== req.user.sub) {
+        await createNotification(tx, {
+          userId: nc.openedById,
+          nonconformityId: nc.id,
+          title: 'Düzeltme onay bekliyor',
+          message: `${nc.number} numaralı uygunsuzluk için düzeltme gönderildi, onayınız bekleniyor.`,
+        });
+      }
 
       return correction;
     });
@@ -448,6 +520,14 @@ router.post(
         toStatus: 'KAPALI',
         actorId: req.user.sub,
         note: 'Düzeltme onaylandı, uygunsuzluk kapatıldı.',
+      });
+
+      const assigneesByNc = await loadAssigneesFor([nc.id], tx);
+      await createNotifications(tx, {
+        userIds: (assigneesByNc[nc.id] || []).map((a) => a.userId),
+        nonconformityId: nc.id,
+        title: 'Uygunsuzluk kapatıldı',
+        message: `${nc.number} numaralı uygunsuzluk onaylanarak kapatıldı.`,
       });
     });
 
@@ -509,6 +589,14 @@ router.post(
         toStatus: 'ACIK',
         actorId: req.user.sub,
         note: `Düzeltme reddedildi: ${parsed.data.reviewNote}`,
+      });
+
+      const assigneesByNc = await loadAssigneesFor([nc.id], tx);
+      await createNotifications(tx, {
+        userIds: (assigneesByNc[nc.id] || []).map((a) => a.userId),
+        nonconformityId: nc.id,
+        title: 'Düzeltme reddedildi',
+        message: `${nc.number} numaralı uygunsuzluk için düzeltmeniz reddedildi: ${parsed.data.reviewNote}`,
       });
     });
 

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { NotificationBell } from './NotificationBell';
 
 const NAV_ITEMS = [
   { to: '/', label: 'Ana Sayfa', icon: '🏠', end: true },
@@ -58,17 +59,20 @@ export function Layout() {
         <div className="flex items-center gap-2 font-bold text-brand-800">
           <span className="text-xl">🦺</span> İSG Takip
         </div>
-        <button onClick={() => navigate('/profil')} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-slate-100">
-          <div className="hidden text-right sm:block">
-            <div className="text-sm font-semibold text-slate-800">{user?.fullName}</div>
-            <div className="text-xs text-slate-500">
-              {user?.isSystemAdmin ? 'Sistem Admini' : context?.roleId ? 'Görev seçili' : ''}
+        <div className="flex items-center gap-1">
+          <NotificationBell />
+          <button onClick={() => navigate('/profil')} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-slate-100">
+            <div className="hidden text-right sm:block">
+              <div className="text-sm font-semibold text-slate-800">{user?.fullName}</div>
+              <div className="text-xs text-slate-500">
+                {user?.isSystemAdmin ? 'Sistem Admini' : context?.roleId ? 'Görev seçili' : ''}
+              </div>
             </div>
-          </div>
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-100 font-bold text-brand-800">
-            {user?.fullName?.charAt(0) || '?'}
-          </div>
-        </button>
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-100 font-bold text-brand-800">
+              {user?.fullName?.charAt(0) || '?'}
+            </div>
+          </button>
+        </div>
       </header>
 
       <div className="mx-auto flex max-w-7xl">

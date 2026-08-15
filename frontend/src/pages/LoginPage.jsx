@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Button, Input, Alert, Card } from '../components/ui';
+import { Button, Input, PasswordInput, Alert, Card } from '../components/ui';
 
 export function LoginPage() {
   const { login, error, clearError } = useAuth();
@@ -36,9 +36,8 @@ export function LoginPage() {
               required
               autoFocus
             />
-            <Input
+            <PasswordInput
               label="Şifre"
-              type="password"
               autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}

@@ -59,7 +59,7 @@ export function NonconformityDetailPage() {
   if (!data) return <p className="text-sm text-slate-500">Yükleniyor...</p>;
 
   const { nonconformity: nc, photos, corrections, history } = data;
-  const isAssignee = user?.id === nc.assignedUserId;
+  const isAssignee = (nc.assignees || []).some((a) => a.userId === user?.id);
   const canReview = hasPermission('uygunsuzluk_onaylama');
   const pendingCorrection = corrections.find((c) => c.status === 'BEKLEMEDE');
   const remaining = remainingDaysLabel(nc.dueDate, nc.status);
@@ -148,7 +148,10 @@ export function NonconformityDetailPage() {
           <InfoRow label="Blok / Bölge" value={nc.blockName} />
           <InfoRow label="Sorumlu Firma" value={nc.companyName} />
           <InfoRow label="Açan Kişi" value={nc.openedByName} />
-          <InfoRow label="Atanan Kişi" value={nc.assignedUserName} />
+          <InfoRow
+            label={(nc.assignees || []).length > 1 ? 'Atanan Kişiler' : 'Atanan Kişi'}
+            value={(nc.assignees || []).map((a) => a.fullName).join(', ') || null}
+          />
           <InfoRow label="Açılış Tarihi" value={formatDateTime(nc.createdAt)} />
           <InfoRow label="Termin Tarihi" value={formatDateTime(nc.dueDate)} />
           {nc.closedAt && <InfoRow label="Kapanış Tarihi" value={formatDateTime(nc.closedAt)} />}

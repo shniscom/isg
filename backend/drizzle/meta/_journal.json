@@ -15,6 +15,20 @@
       "when": 1786544596745,
       "tag": "0001_wakeful_gwen_stacy",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786796042269,
+      "tag": "0002_steady_monster_badoon",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786796187595,
+      "tag": "0003_dazzling_screwball",
+      "breakpoints": true
     }
   ]
 }
