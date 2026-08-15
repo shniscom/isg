@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Card, Input, Button, Alert, Badge } from '../components/ui';
 import apiClient, { getErrorMessage } from '../api/client';
@@ -57,14 +58,24 @@ export function ProfilePage() {
             <Badge variant="info">Sistem Admini</Badge>
           </div>
         )}
-        {context?.permissions?.length > 0 && (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {context.permissions.map((p) => (
-              <Badge key={p}>{p}</Badge>
-            ))}
-          </div>
-        )}
       </Card>
+
+      <Link to="/yetkilerim">
+        <Card className="flex items-center justify-between transition hover:border-brand-300 hover:shadow-md">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">🔑</span>
+            <div>
+              <div className="font-semibold text-slate-800">Yetkilerim</div>
+              <div className="text-xs text-slate-500">
+                {context?.permissions?.length > 0 || user?.isSystemAdmin
+                  ? 'Sahip olduğunuz yetkileri görüntüleyin'
+                  : 'Henüz size özel bir yetki tanımlanmamış'}
+              </div>
+            </div>
+          </div>
+          <span className="text-slate-400">›</span>
+        </Card>
+      </Link>
 
       <Card>
         <h2 className="mb-3 font-semibold text-slate-800">Şifre Değiştir</h2>

@@ -128,6 +128,17 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  const refreshMe = useCallback(async () => {
+    try {
+      const { data } = await apiClient.get('/auth/me');
+      setUser(data.user);
+      setContext(data.context);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, message: getErrorMessage(err) };
+    }
+  }, []);
+
   const backToLogin = useCallback(() => {
     setContextToken(null);
     setAssignments([]);
@@ -158,12 +169,13 @@ export function AuthProvider({ children }) {
       login,
       selectContext,
       changePassword,
+      refreshMe,
       backToLogin,
       logout,
       hasPermission,
       clearError: () => setError(null),
     }),
-    [status, user, assignments, accessToken, context, error, login, selectContext, changePassword, backToLogin, logout, hasPermission]
+    [status, user, assignments, accessToken, context, error, login, selectContext, changePassword, refreshMe, backToLogin, logout, hasPermission]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

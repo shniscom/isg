@@ -19,3 +19,45 @@ export const PERMISSION_DESCRIPTIONS = {
   firma_yonetme: 'Ana firma, taşeron ve tedarikçi tanımlarını yönetebilir.',
   proje_yonetme: 'Proje ve proje içi blok/bölge tanımlarını yönetebilir.',
 };
+
+// Yetkileri "Yetkilerim" sayfasında düzenli göstermek için kategori grupları.
+export const PERMISSION_CATEGORIES = [
+  {
+    title: 'Uygunsuzluk İşlemleri',
+    icon: '⚠️',
+    keys: [
+      'uygunsuzluk_gorme',
+      'uygunsuzluk_acma',
+      'uygunsuzluk_duzeltme',
+      'uygunsuzluk_kapatma_talebi',
+      'uygunsuzluk_onaylama',
+      'uygunsuzluk_duzenleme',
+      'uygunsuzluk_silme',
+    ],
+  },
+  {
+    title: 'İtiraz',
+    icon: '📩',
+    keys: ['itiraz_olusturma', 'itiraz_sonuclandirma'],
+  },
+  {
+    title: 'Termin Uzatma',
+    icon: '⏳',
+    keys: ['termin_uzatma_talebi', 'termin_uzatma_onaylama'],
+  },
+  {
+    title: 'Saha Yaptırımları',
+    icon: '🛑',
+    keys: ['calisma_durdurma', 'cezai_islem'],
+  },
+  {
+    title: 'Raporlama',
+    icon: '📊',
+    keys: ['rapor_goruntuleme', 'rapor_alma'],
+  },
+  {
+    title: 'Yönetim',
+    icon: '🛠️',
+    keys: ['kullanici_yonetme', 'firma_yonetme', 'proje_yonetme'],
+  },
+];

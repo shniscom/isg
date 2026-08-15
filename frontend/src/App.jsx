@@ -9,6 +9,7 @@ import { SelectContextPage } from './pages/SelectContextPage';
 import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { ProfilePage } from './pages/ProfilePage';
+import { PermissionsPage } from './pages/PermissionsPage';
 import { ProjectsPage } from './pages/admin/ProjectsPage';
 import { ProjectDetailPage } from './pages/admin/ProjectDetailPage';
 import { CompaniesPage } from './pages/admin/CompaniesPage';
@@ -69,6 +70,7 @@ function AppRoutes() {
       >
         <Route path="/" element={<DashboardPage />} />
         <Route path="/profil" element={<ProfilePage />} />
+        <Route path="/yetkilerim" element={<PermissionsPage />} />
         <Route path="/uygunsuzluklar" element={<NonconformitiesListPage />} />
         <Route path="/uygunsuzluklar/yeni" element={<NewNonconformityPage />} />
         <Route path="/uygunsuzluklar/:id" element={<NonconformityDetailPage />} />

@@ -501,3 +501,66 @@ test('R2 yapılandırılmamışsa presign-upload 400 döner (bu test ortamında 
   });
   assert.equal(res.status, 400);
 });
+
+// ---------------------------------------------------------------------------
+// Regresyon: yetki değişikliği aynı oturum tokenıyla anında etkili olmalı
+// (JWT'ye gömülü eski yetkilere güvenilmemeli, her istekte DB'den tazelenmeli).
+// ---------------------------------------------------------------------------
+test('yetki değişikliği yeniden giriş yapmadan aynı token ile anında etkili olur', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Test Şantiyesi 3', code: 'TST-003' } });
+  const projectId = proj.body.project.id;
+
+  const rolesRes = await api('GET', '/admin/roles', { token: adminToken });
+  const formenRoleId = rolesRes.body.roles.find((r) => r.name === 'Formen').id;
+
+  const permsRes = await api('GET', '/admin/permissions', { token: adminToken });
+  const uygunsuzlukAcmaId = permsRes.body.permissions.find((p) => p.key === 'uygunsuzluk_acma').id;
+
+  const userCreate = await api('POST', '/admin/users', {
+    token: adminToken,
+    body: { fullName: 'Canlı Yetki Testi', username: 'canli.yetki.testi' },
+  });
+  const userId = userCreate.body.user.id;
+  await api('POST', `/admin/users/${userId}/projects`, { token: adminToken, body: { projectId, roleId: formenRoleId } });
+
+  const login = await api('POST', '/auth/login', { body: { username: 'canli.yetki.testi', password: userCreate.body.tempPassword } });
+  const select = await api('POST', '/auth/select-context', {
+    body: { contextToken: login.body.contextToken, projectId, roleId: formenRoleId },
+  });
+  const token = select.body.accessToken; // Bu token'ın permissions claim'i boş üretildi.
+
+  // Henüz yetki verilmedi -> açma denemesi reddedilmeli.
+  const beforeGrant = await api('POST', '/nonconformities', {
+    token,
+    body: { description: 'test açıklama', assignedUserIds: [userId], dueDate: new Date(Date.now() + 86400000).toISOString() },
+  });
+  assert.equal(beforeGrant.status, 403);
+
+  // Admin yetkiyi verir (kullanıcı hiç re-login olmaz, aynı token'ı kullanmaya devam eder).
+  await api('POST', `/admin/users/${userId}/permissions`, {
+    token: adminToken,
+    body: { permissionId: uygunsuzlukAcmaId, projectId },
+  });
+
+  // /auth/me artık yeni yetkiyi göstermeli.
+  const me = await api('GET', '/auth/me', { token });
+  assert.ok(me.body.context.permissions.includes('uygunsuzluk_acma'));
+
+  // Aynı token ile aynı işlem artık kabul edilmeli.
+  const afterGrant = await api('POST', '/nonconformities', {
+    token,
+    body: { description: 'test açıklama', assignedUserIds: [userId], dueDate: new Date(Date.now() + 86400000).toISOString() },
+  });
+  assert.equal(afterGrant.status, 201);
+
+  // Yetkiyi geri al -> aynı token ile artık tekrar reddedilmeli.
+  const grantedList = await api('GET', `/admin/users/${userId}`, { token: adminToken });
+  const grantRowId = grantedList.body.permissions.find((p) => p.permissionId === uygunsuzlukAcmaId).id;
+  await api('DELETE', `/admin/users/${userId}/permissions/${grantRowId}`, { token: adminToken });
+
+  const afterRevoke = await api('POST', '/nonconformities', {
+    token,
+    body: { description: 'test açıklama 2', assignedUserIds: [userId], dueDate: new Date(Date.now() + 86400000).toISOString() },
+  });
+  assert.equal(afterRevoke.status, 403);
+});

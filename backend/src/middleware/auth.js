@@ -1,6 +1,7 @@
 const { verifyToken } = require('../utils/jwt');
 const { ApiError } = require('../utils/apiError');
 const { asyncHandler } = require('../utils/asyncHandler');
+const { getEffectivePermissions } = require('../services/permissions.service');
 
 function extractToken(req) {
   const header = req.headers.authorization || '';
@@ -8,7 +9,13 @@ function extractToken(req) {
   return null;
 }
 
-/** Geçerli bir "access" token zorunlu kılar; req.user doldurulur. */
+/**
+ * Geçerli bir "access" token zorunlu kılar; req.user doldurulur.
+ *
+ * Not: Yetkiler JWT'ye gömülü olarak GÜVENİLMEZ; her istekte veritabanından tazelenir.
+ * Aksi halde admin bir kullanıcının yetkisini değiştirdiğinde, o kullanıcı mevcut oturum
+ * tokenı (12 saate kadar) geçerli olduğu sürece eski yetkilerle işlem yapmaya devam ederdi.
+ */
 const requireAuth = asyncHandler(async (req, res, next) => {
   const token = extractToken(req);
   if (!token) throw ApiError.unauthorized('Oturum bilgisi bulunamadı.');
@@ -24,7 +31,12 @@ const requireAuth = asyncHandler(async (req, res, next) => {
     throw ApiError.unauthorized('Geçersiz oturum türü.');
   }
 
-  req.user = decoded; // { sub, isSystemAdmin, projectId, roleId, permissions, iat, exp }
+  let permissions = decoded.permissions || [];
+  if (!decoded.isSystemAdmin && decoded.projectId) {
+    permissions = await getEffectivePermissions(decoded.sub, decoded.projectId);
+  }
+
+  req.user = { ...decoded, permissions }; // { sub, isSystemAdmin, projectId, roleId, permissions, iat, exp }
   next();
 });
 
