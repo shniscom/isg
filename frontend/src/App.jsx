@@ -16,6 +16,9 @@ import { UsersPage } from './pages/admin/UsersPage';
 import { UserDetailPage } from './pages/admin/UserDetailPage';
 import { RolesPage } from './pages/admin/RolesPage';
 import { CategoriesPage } from './pages/admin/CategoriesPage';
+import { NonconformitiesListPage } from './pages/NonconformitiesListPage';
+import { NewNonconformityPage } from './pages/NewNonconformityPage';
+import { NonconformityDetailPage } from './pages/NonconformityDetailPage';
 
 function PublicOnlyRoute({ children, expectedStatus }) {
   const { status } = useAuth();
@@ -66,6 +69,9 @@ function AppRoutes() {
       >
         <Route path="/" element={<DashboardPage />} />
         <Route path="/profil" element={<ProfilePage />} />
+        <Route path="/uygunsuzluklar" element={<NonconformitiesListPage />} />
+        <Route path="/uygunsuzluklar/yeni" element={<NewNonconformityPage />} />
+        <Route path="/uygunsuzluklar/:id" element={<NonconformityDetailPage />} />
 
         <Route
           path="/admin/projeler"

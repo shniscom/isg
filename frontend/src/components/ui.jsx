@@ -28,6 +28,22 @@ export function Input({ label, error, className = '', ...props }) {
   );
 }
 
+export function Textarea({ label, error, className = '', ...props }) {
+  return (
+    <label className="block">
+      {label && <span className="mb-1.5 block text-sm font-medium text-slate-700">{label}</span>}
+      <textarea
+        className={`w-full rounded-xl border px-4 py-3 text-base outline-none transition focus:ring-2 focus:ring-brand-500 ${
+          error ? 'border-red-400 bg-red-50' : 'border-slate-300 bg-white'
+        } ${className}`}
+        rows={4}
+        {...props}
+      />
+      {error && <span className="mt-1 block text-sm text-red-600">{error}</span>}
+    </label>
+  );
+}
+
 export function Select({ label, error, children, className = '', ...props }) {
   return (
     <label className="block">
@@ -66,8 +82,10 @@ export function Badge({ children, variant = 'default' }) {
     danger: 'bg-red-100 text-red-700',
     warning: 'bg-amber-100 text-amber-800',
     info: 'bg-blue-100 text-blue-700',
+    orange: 'bg-orange-100 text-orange-700',
+    purple: 'bg-purple-100 text-purple-700',
   };
-  return <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${variants[variant]}`}>{children}</span>;
+  return <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${variants[variant] || variants.default}`}>{children}</span>;
 }
 
 export function Spinner({ className = '' }) {

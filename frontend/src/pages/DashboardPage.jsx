@@ -1,6 +1,9 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import apiClient from '../api/client';
 import { Card, Badge } from '../components/ui';
+import { STATUS_LABELS } from '../lib/nonconformity';
 
 const ADMIN_SHORTCUTS = [
   { to: '/admin/projeler', label: 'Projeler', icon: '🏗️', permission: 'proje_yonetme', desc: 'Proje, blok/bölge tanımları' },
@@ -13,6 +16,24 @@ export function DashboardPage() {
   const { user, context, hasPermission } = useAuth();
 
   const shortcuts = ADMIN_SHORTCUTS.filter((s) => hasPermission(s.permission));
+
+  const [counts, setCounts] = useState(null);
+
+  useEffect(() => {
+    if (user?.isSystemAdmin) return;
+    apiClient
+      .get('/nonconformities')
+      .then(({ data }) => {
+        const items = data.nonconformities || [];
+        setCounts({
+          toplam: items.length,
+          ACIK: items.filter((i) => i.status === 'ACIK').length,
+          BEKLEMEDE: items.filter((i) => i.status === 'BEKLEMEDE').length,
+          KAPALI: items.filter((i) => i.status === 'KAPALI').length,
+        });
+      })
+      .catch(() => setCounts(null));
+  }, [user]);
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -41,18 +62,38 @@ export function DashboardPage() {
         </Card>
       )}
 
-      <Card className="border-brand-100 bg-brand-50">
-        <div className="flex items-start gap-3">
-          <span className="text-2xl">🚧</span>
-          <div>
-            <h2 className="font-semibold text-brand-900">Uygunsuzluk takip modülü yakında</h2>
-            <p className="mt-1 text-sm text-brand-800">
-              Bu ilk sürüm (FAZ 1); proje, firma, kullanıcı ve yetki altyapısını içerir. Uygunsuzluk açma/kapama,
-              itiraz, termin ve ceza modülleri sonraki fazlarda bu ana sayfaya eklenecektir.
-            </p>
+      {!user?.isSystemAdmin && (
+        <Card>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="font-semibold text-slate-800">Uygunsuzluklar</h2>
+            <Link to="/uygunsuzluklar" className="text-sm font-medium text-brand-700 hover:underline">
+              Tümünü gör →
+            </Link>
           </div>
-        </div>
-      </Card>
+          {counts ? (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="rounded-xl border border-slate-200 p-3 text-center">
+                <div className="text-2xl font-bold text-slate-800">{counts.toplam}</div>
+                <div className="text-xs text-slate-500">Toplam</div>
+              </div>
+              <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-center">
+                <div className="text-2xl font-bold text-red-700">{counts.ACIK}</div>
+                <div className="text-xs text-red-700">{STATUS_LABELS.ACIK}</div>
+              </div>
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-center">
+                <div className="text-2xl font-bold text-amber-700">{counts.BEKLEMEDE}</div>
+                <div className="text-xs text-amber-700">{STATUS_LABELS.BEKLEMEDE}</div>
+              </div>
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-center">
+                <div className="text-2xl font-bold text-emerald-700">{counts.KAPALI}</div>
+                <div className="text-xs text-emerald-700">{STATUS_LABELS.KAPALI}</div>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">Yükleniyor...</p>
+          )}
+        </Card>
+      )}
 
       {shortcuts.length > 0 && (
         <div>
