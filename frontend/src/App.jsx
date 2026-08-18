@@ -17,10 +17,14 @@ import { UsersPage } from './pages/admin/UsersPage';
 import { UserDetailPage } from './pages/admin/UserDetailPage';
 import { RolesPage } from './pages/admin/RolesPage';
 import { CategoriesPage } from './pages/admin/CategoriesPage';
+import { SettingsPage } from './pages/admin/SettingsPage';
 import { NonconformitiesListPage } from './pages/NonconformitiesListPage';
 import { NewNonconformityPage } from './pages/NewNonconformityPage';
 import { NonconformityDetailPage } from './pages/NonconformityDetailPage';
 import { ReportsPage } from './pages/ReportsPage';
+import { PenaltiesPage } from './pages/PenaltiesPage';
+import { EmployeesPage } from './pages/EmployeesPage';
+import { EmployeeDetailPage } from './pages/EmployeeDetailPage';
 
 function PublicOnlyRoute({ children, expectedStatus }) {
   const { status } = useAuth();
@@ -76,6 +80,9 @@ function AppRoutes() {
         <Route path="/uygunsuzluklar/yeni" element={<NewNonconformityPage />} />
         <Route path="/uygunsuzluklar/:id" element={<NonconformityDetailPage />} />
         <Route path="/raporlar" element={<ReportsPage />} />
+        <Route path="/cezalar" element={<PenaltiesPage />} />
+        <Route path="/calisanlar" element={<EmployeesPage />} />
+        <Route path="/calisanlar/:id" element={<EmployeeDetailPage />} />
 
         <Route
           path="/admin/projeler"
@@ -130,6 +137,14 @@ function AppRoutes() {
           element={
             <AdminRoute>
               <CategoriesPage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/admin/ayarlar"
+          element={
+            <AdminRoute>
+              <SettingsPage />
             </AdminRoute>
           }
         />

@@ -1,9 +1,16 @@
 const { db } = require('../db/client');
 const { notifications } = require('../db/schema');
+const { sendPushToUser, sendPushToUsers } = require('./push.service');
+
+function notificationUrl(nonconformityId) {
+  return nonconformityId ? `/uygunsuzluklar/${nonconformityId}` : '/';
+}
 
 /**
  * Kullanıcıya uygulama içi bildirim oluşturur. `tx` verilirse aynı transaction içinde çalışır
  * (ör. uygunsuzluk oluşturma/atama işlemiyle birlikte atomik olarak kaydedilir).
+ * Ayrıca (VAPID yapılandırılmışsa) tarayıcı push bildirimi de tetiklenir; push gönderimi
+ * ana işlemi bloklamaz/başarısız etmez (fire-and-forget).
  */
 async function createNotification(tx, { userId, nonconformityId, title, message }) {
   const executor = tx || db;
@@ -13,6 +20,7 @@ async function createNotification(tx, { userId, nonconformityId, title, message 
     title,
     message,
   });
+  sendPushToUser(userId, { title, message, url: notificationUrl(nonconformityId) }).catch(() => {});
 }
 
 /** Birden fazla kullanıcıya aynı bildirimi gönderir (ör. tüm atananlara). */
@@ -27,6 +35,7 @@ async function createNotifications(tx, { userIds, nonconformityId, title, messag
       message,
     }))
   );
+  sendPushToUsers(userIds, { title, message, url: notificationUrl(nonconformityId) }).catch(() => {});
 }
 
 module.exports = { createNotification, createNotifications };

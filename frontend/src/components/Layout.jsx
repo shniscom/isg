@@ -1,17 +1,21 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { NotificationBell } from './NotificationBell';
+import { ensurePushSubscription, listenForPushNavigation } from '../lib/pushNotifications';
 
 const NAV_ITEMS = [
   { to: '/', label: 'Ana Sayfa', icon: '🏠', end: true },
   { to: '/uygunsuzluklar', label: 'Uygunsuzluklar', icon: '⚠️' },
+  { to: '/calisanlar', label: 'Çalışanlar', icon: '👷' },
   { to: '/raporlar', label: 'Raporlar', icon: '📊', permission: 'rapor_goruntuleme' },
+  { to: '/cezalar', label: 'Cezalar', icon: '⚖️', permission: 'cezai_islem' },
   { to: '/admin/projeler', label: 'Projeler', icon: '🏗️', permission: 'proje_yonetme' },
   { to: '/admin/firmalar', label: 'Firmalar', icon: '🏢', permission: 'firma_yonetme' },
   { to: '/admin/kullanicilar', label: 'Kullanıcılar', icon: '👤', permission: 'kullanici_yonetme' },
   { to: '/admin/gorevler', label: 'Görevler', icon: '🎯', permission: 'kullanici_yonetme' },
   { to: '/admin/kategoriler', label: 'Kategoriler', icon: '🏷️', adminOnly: true },
+  { to: '/admin/ayarlar', label: 'Ayarlar', icon: '⚙️', adminOnly: true },
 ];
 
 function NavItems({ onNavigate }) {
@@ -46,6 +50,13 @@ export function Layout() {
   const { user, context, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const navigate = useNavigate();
+
+  // Giriş yapılmış her ekranda: push bildirim izni/kaydı bir kez denenir, ve service worker'dan
+  // gelen "bildirime tıklandı" mesajları dinlenip ilgili sayfaya yönlendirilir.
+  useEffect(() => {
+    ensurePushSubscription();
+    return listenForPushNavigation(navigate);
+  }, [navigate]);
 
   return (
     <div className="min-h-screen bg-slate-50">

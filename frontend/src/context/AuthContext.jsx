@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import apiClient, { setAuthToken, setUnauthorizedHandler, getErrorMessage } from '../api/client';
+import { clearPushSubscription } from '../lib/pushNotifications';
 
 const AuthContext = createContext(null);
 
@@ -146,6 +147,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const logout = useCallback(() => {
+    clearPushSubscription();
     reset();
   }, [reset]);
 

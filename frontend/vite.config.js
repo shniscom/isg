@@ -9,6 +9,14 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
+      // injectManifest: kendi service worker'ımızı (src/sw.js) kullanabilmek için (push +
+      // notificationclick olayları). generateSW modunda özel event handler eklemek mümkün değil.
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.js',
+      injectManifest: {
+        globPatterns: ['**/*.{js,css,html,png,svg,ico}'],
+      },
       registerType: 'autoUpdate',
       includeAssets: ['apple-touch-icon.png', 'favicon-32.png'],
       manifest: {
@@ -26,11 +34,6 @@ export default defineConfig({
           { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png' },
           { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
-      },
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,png,svg,ico}'],
-        // API isteklerini asla önbelleğe alma; her zaman ağdan taze veri çek.
-        navigateFallbackDenylist: [/^\/api\//],
       },
       devOptions: {
         enabled: false,

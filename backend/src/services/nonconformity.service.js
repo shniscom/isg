@@ -1,5 +1,6 @@
 const { sql, eq } = require('drizzle-orm');
-const { projects, nonconformityStatusHistory } = require('../db/schema');
+const { db } = require('../db/client');
+const { projects, nonconformityStatusHistory, nonconformityAssignees } = require('../db/schema');
 
 /**
  * Proje bazında atomik olarak bir sonraki uygunsuzluk numarasını üretir.
@@ -36,4 +37,13 @@ async function logStatusChange(tx, { nonconformityId, fromStatus, toStatus, acto
   });
 }
 
-module.exports = { generateNonconformityNumber, logStatusChange };
+/** Bir uygunsuzluğa atanan kullanıcı id'lerini döner (bildirim/zamanlayıcı gibi servis içi kullanım için). */
+async function loadAssigneeIdsFor(nonconformityId) {
+  const rows = await db
+    .select({ userId: nonconformityAssignees.userId })
+    .from(nonconformityAssignees)
+    .where(eq(nonconformityAssignees.nonconformityId, nonconformityId));
+  return rows.map((r) => r.userId);
+}
+
+module.exports = { generateNonconformityNumber, logStatusChange, loadAssigneeIdsFor };

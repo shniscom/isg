@@ -15,8 +15,13 @@ const {
   companies,
   userProjects,
   roles,
+  employees,
+  penalties,
+  permissions,
+  userPermissions,
 } = require('../db/schema');
 const { createNotification, createNotifications } = require('../services/notification.service');
+const { getSetting } = require('../services/settings.service');
 const { requireAuth } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permission');
 const { asyncHandler } = require('../utils/asyncHandler');
@@ -221,6 +226,42 @@ router.get(
       myClosedCount = closedRow?.value || 0;
     }
 
+    // Firma bazlı kırılım: bu dönemde açılan / kapatılan sayıları, ana firma dahil her firma için.
+    const openedByCompanyRows = await db
+      .select({ companyId: nonconformities.companyId, value: count() })
+      .from(nonconformities)
+      .where(and(eq(nonconformities.projectId, projectId), gte(nonconformities.createdAt, from)))
+      .groupBy(nonconformities.companyId);
+    const closedByCompanyRows = await db
+      .select({ companyId: nonconformities.companyId, value: count() })
+      .from(nonconformities)
+      .where(
+        and(
+          eq(nonconformities.projectId, projectId),
+          eq(nonconformities.status, 'KAPALI'),
+          gte(nonconformities.closedAt, from)
+        )
+      )
+      .groupBy(nonconformities.companyId);
+
+    const allCompanyIds = [
+      ...new Set([...openedByCompanyRows.map((r) => r.companyId), ...closedByCompanyRows.map((r) => r.companyId)].filter(Boolean)),
+    ];
+    const companyRows = allCompanyIds.length
+      ? await db.select({ id: companies.id, name: companies.name }).from(companies).where(inArray(companies.id, allCompanyIds))
+      : [];
+    const companyNameById = new Map(companyRows.map((c) => [c.id, c.name]));
+    const closedByCompany = new Map(closedByCompanyRows.map((r) => [r.companyId, r.value]));
+
+    const companyBreakdown = openedByCompanyRows
+      .map((r) => ({
+        companyId: r.companyId,
+        companyName: r.companyId ? companyNameById.get(r.companyId) || 'Bilinmeyen Firma' : 'Firma Belirtilmemiş',
+        opened: r.value,
+        closed: closedByCompany.get(r.companyId) || 0,
+      }))
+      .sort((a, b) => b.opened - a.opened);
+
     res.json({
       range,
       from: from.toISOString(),
@@ -228,6 +269,7 @@ router.get(
       myOpened: myOpenedRow?.value || 0,
       myAssigned: myAssignedCount,
       myClosed: myClosedCount,
+      companyBreakdown,
     });
   })
 );
@@ -311,8 +353,11 @@ const createSchema = z.object({
   categoryId: z.string().optional().nullable(),
   blockId: z.string().optional().nullable(),
   companyId: z.string().optional().nullable(),
+  employeeId: z.string().optional().nullable(), // uygunsuz davranışta bulunan çalışan
   assignedUserIds: z.array(z.string().min(1)).min(1, 'En az bir atanan kişi seçilmelidir.'),
   description: z.string().min(5, 'Açıklama en az 5 karakter olmalıdır.'),
+  correctionSuggestion: z.string().optional().nullable(),
+  riskScore: z.number().int().min(1).max(5).optional().nullable(),
   priority: z.enum(['DUSUK', 'ORTA', 'YUKSEK', 'KRITIK']).default('ORTA'),
   dueDate: z.string().datetime({ message: 'Geçerli bir termin tarihi giriniz.' }),
   photos: z.array(photoInputSchema).optional().default([]),
@@ -326,6 +371,11 @@ router.post(
     if (!parsed.success) throw ApiError.badRequest('Geçersiz uygunsuzluk bilgisi.', parsed.error.flatten());
     const data = parsed.data;
     const projectId = resolveProjectId(req, data.projectId);
+
+    const maxPhotos = await getSetting('maxPhotosPerUpload', 5);
+    if (data.photos.length > maxPhotos) {
+      throw ApiError.badRequest(`En fazla ${maxPhotos} fotoğraf yükleyebilirsiniz.`);
+    }
 
     const dueDate = new Date(data.dueDate);
     if (dueDate.getTime() <= Date.now()) {
@@ -360,8 +410,11 @@ router.post(
           categoryId: data.categoryId || null,
           blockId: data.blockId || null,
           companyId: data.companyId || null,
+          employeeId: data.employeeId || null,
           openedById: req.user.sub,
           description: data.description,
+          correctionSuggestion: data.correctionSuggestion || null,
+          riskScore: data.riskScore || null,
           priority: data.priority,
           dueDate,
         })
@@ -427,12 +480,13 @@ router.get(
       if (!canSeeAll && !isOwnerOrAssignee) throw ApiError.forbidden();
     }
 
-    const [project, category, block, company, openedBy] = await Promise.all([
+    const [project, category, block, company, openedBy, employee] = await Promise.all([
       db.select().from(projects).where(eq(projects.id, nc.projectId)).limit(1).then((r) => r[0]),
       nc.categoryId ? db.select().from(categories).where(eq(categories.id, nc.categoryId)).limit(1).then((r) => r[0]) : null,
       nc.blockId ? db.select().from(projectBlocks).where(eq(projectBlocks.id, nc.blockId)).limit(1).then((r) => r[0]) : null,
       nc.companyId ? db.select().from(companies).where(eq(companies.id, nc.companyId)).limit(1).then((r) => r[0]) : null,
       db.select().from(users).where(eq(users.id, nc.openedById)).limit(1).then((r) => r[0]),
+      nc.employeeId ? db.select().from(employees).where(eq(employees.id, nc.employeeId)).limit(1).then((r) => r[0]) : null,
     ]);
 
     const photosRaw = await db.select().from(nonconformityPhotos).where(eq(nonconformityPhotos.nonconformityId, nc.id));
@@ -475,6 +529,27 @@ router.get(
       })
     );
 
+    const penaltyRows = await db
+      .select()
+      .from(penalties)
+      .where(eq(penalties.nonconformityId, nc.id))
+      .orderBy(desc(penalties.requestedAt));
+    const ncPenalties = await Promise.all(
+      penaltyRows.map(async (p) => {
+        const [requestedBy] = await db.select({ fullName: users.fullName }).from(users).where(eq(users.id, p.requestedById)).limit(1);
+        const decidedBy = p.decidedById
+          ? await db.select({ fullName: users.fullName }).from(users).where(eq(users.id, p.decidedById)).limit(1).then((r) => r[0])
+          : null;
+        return { ...p, requestedByName: requestedBy?.fullName || null, decidedByName: decidedBy?.fullName || null };
+      })
+    );
+
+    // Ceza talebi oluşturma hakkı: termin geçmiş, hâlâ kapanmamış ve açan kişi (ya da admin).
+    const canRequestPenalty =
+      (req.user.isSystemAdmin || nc.openedById === req.user.sub) &&
+      nc.status !== 'KAPALI' &&
+      new Date(nc.dueDate).getTime() <= Date.now();
+
     res.json({
       nonconformity: {
         ...nc,
@@ -483,11 +558,15 @@ router.get(
         blockName: block?.name || null,
         companyName: company?.name || null,
         openedByName: openedBy?.fullName,
+        employeeName: employee?.fullName || null,
+        employeeNationalId: employee?.nationalId || null,
         assignees,
+        canRequestPenalty,
       },
       photos,
       corrections,
       history: historyWithActors,
+      penalties: ncPenalties,
     });
   })
 );
@@ -505,6 +584,11 @@ router.post(
   asyncHandler(async (req, res) => {
     const parsed = correctionSchema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz düzeltme bilgisi.', parsed.error.flatten());
+
+    const maxPhotos = await getSetting('maxPhotosPerUpload', 5);
+    if (parsed.data.photos.length > maxPhotos) {
+      throw ApiError.badRequest(`En fazla ${maxPhotos} fotoğraf yükleyebilirsiniz.`);
+    }
 
     const [nc] = await db.select().from(nonconformities).where(eq(nonconformities.id, req.params.id)).limit(1);
     if (!nc) throw ApiError.notFound('Uygunsuzluk bulunamadı.');
@@ -695,6 +779,93 @@ router.post(
     });
 
     res.json({ success: true });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Cezai işlem talebi: termin süresi geçmiş ve hâlâ kapatılmamış bir uygunsuzluk için,
+// açan kişi (veya admin) tarafından oluşturulur. Onaya admin ve 'cezai_islem' yetkisine
+// sahip kişilere gönderilir. Bu yalnızca bir talep/kayıttır; sistem otomatik bir yaptırım
+// uygulamaz.
+// ---------------------------------------------------------------------------
+const penaltyRequestSchema = z.object({
+  reason: z.string().min(5, 'Gerekçe en az 5 karakter olmalıdır.'),
+  sanctionType: z.enum(['PARA_CEZASI', 'UYARI', 'CALISMADAN_UZAKLASTIRMA', 'IS_AKDI_FESHI', 'DIGER']).default('PARA_CEZASI'),
+  suggestedAmount: z.number().int().positive().optional().nullable(),
+});
+
+router.post(
+  '/:id/penalty-request',
+  asyncHandler(async (req, res) => {
+    const parsed = penaltyRequestSchema.safeParse(req.body);
+    if (!parsed.success) throw ApiError.badRequest('Geçersiz ceza talebi.', parsed.error.flatten());
+
+    const [nc] = await db.select().from(nonconformities).where(eq(nonconformities.id, req.params.id)).limit(1);
+    if (!nc) throw ApiError.notFound('Uygunsuzluk bulunamadı.');
+    if (!req.user.isSystemAdmin && nc.projectId !== req.user.projectId) throw ApiError.forbidden();
+
+    if (!req.user.isSystemAdmin && nc.openedById !== req.user.sub) {
+      throw ApiError.forbidden('Cezai işlem talebini yalnızca uygunsuzluğu açan kişi oluşturabilir.');
+    }
+    if (nc.status === 'KAPALI') {
+      throw ApiError.conflict('Kapatılmış bir uygunsuzluk için ceza talebi oluşturulamaz.');
+    }
+    if (new Date(nc.dueDate).getTime() > Date.now()) {
+      throw ApiError.conflict('Termin süresi henüz dolmadan ceza talebi oluşturulamaz.');
+    }
+
+    const [created] = await db
+      .insert(penalties)
+      .values({
+        nonconformityId: nc.id,
+        employeeId: nc.employeeId || null,
+        requestedById: req.user.sub,
+        reason: parsed.data.reason,
+        sanctionType: parsed.data.sanctionType,
+        suggestedAmount: parsed.data.suggestedAmount || null,
+      })
+      .returning();
+
+    let employeePriorApprovedCount = 0;
+    if (nc.employeeId) {
+      const [row] = await db
+        .select({ value: count() })
+        .from(penalties)
+        .where(and(eq(penalties.employeeId, nc.employeeId), eq(penalties.status, 'ONAYLANDI')));
+      employeePriorApprovedCount = row?.value || 0;
+    }
+
+    // Bildirim: sistem adminleri + bu projede 'cezai_islem' yetkisi olan kullanıcılar.
+    const adminUsers = await db.select({ id: users.id }).from(users).where(eq(users.isSystemAdmin, true));
+    const permHolders = await db
+      .select({ userId: userPermissions.userId })
+      .from(userPermissions)
+      .innerJoin(permissions, eq(userPermissions.permissionId, permissions.id))
+      .where(
+        and(
+          eq(permissions.key, 'cezai_islem'),
+          eq(userPermissions.granted, true),
+          or(isNull(userPermissions.projectId), eq(userPermissions.projectId, nc.projectId))
+        )
+      );
+    const notifyIds = [...new Set([...adminUsers.map((u) => u.id), ...permHolders.map((p) => p.userId)])];
+    await createNotifications(null, {
+      userIds: notifyIds,
+      nonconformityId: nc.id,
+      title: 'Ceza talebi onay bekliyor',
+      message: `${nc.number} numaralı uygunsuzluk termin süresini aştı, cezai işlem talebi onayınızı bekliyor.`,
+    });
+
+    await logAudit({
+      userId: req.user.sub,
+      action: 'PENALTY_REQUEST',
+      entityType: 'penalty',
+      entityId: created.id,
+      details: { nonconformityId: nc.id, sanctionType: parsed.data.sanctionType },
+      ipAddress: req.ip,
+    });
+
+    res.status(201).json({ penalty: created, employeePriorApprovedCount });
   })
 );
 

@@ -43,6 +43,8 @@ const nonconformityPhotoTypeEnum = pgEnum('nonconformity_photo_type', [
 ]);
 
 const correctionStatusEnum = pgEnum('correction_status', ['BEKLEMEDE', 'ONAYLANDI', 'REDDEDILDI']);
+const penaltySanctionEnum = pgEnum('penalty_sanction', ['PARA_CEZASI', 'UYARI', 'CALISMADAN_UZAKLASTIRMA', 'IS_AKDI_FESHI', 'DIGER']);
+const penaltyStatusEnum = pgEnum('penalty_status', ['BEKLEMEDE', 'ONAYLANDI', 'REDDEDILDI']);
 
 const users = pgTable('users', {
   id: text('id').primaryKey().$defaultFn(genId),
@@ -183,6 +185,24 @@ const auditLogs = pgTable('audit_logs', {
  * Bir uygunsuzluk kaydı. Doküman terminolojisiyle: açan kişi, sorumlu firma, atanan kişi,
  * açıldığı blok/bölge, kategori, termin tarihi, öncelik ve durum bilgilerini taşır.
  */
+/**
+ * Sahada isim/T.C. kimlik no ile takip edilen çalışan kaydı. Uygunsuz davranışta bulunan
+ * çalışanları uygunsuzluklara bağlamak ve tekrar eden ihlalleri görebilmek için kullanılır.
+ * Sistem kullanıcısı (users) DEĞİLDİR; giriş yapamaz, yalnızca bir takip kaydıdır.
+ */
+const employees = pgTable('employees', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  companyId: text('company_id').references(() => companies.id, { onDelete: 'set null' }),
+  fullName: text('full_name').notNull(),
+  nationalId: text('national_id'), // T.C. kimlik no, biliniyorsa
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('employees_project_idx').on(table.projectId),
+  index('employees_company_idx').on(table.companyId),
+]);
+
 const nonconformities = pgTable('nonconformities', {
   id: text('id').primaryKey().$defaultFn(genId),
   number: text('number').notNull(), // örn. 2026-ANK-000125
@@ -190,12 +210,16 @@ const nonconformities = pgTable('nonconformities', {
   categoryId: text('category_id').references(() => categories.id, { onDelete: 'set null' }),
   blockId: text('block_id').references(() => projectBlocks.id, { onDelete: 'set null' }),
   companyId: text('company_id').references(() => companies.id, { onDelete: 'set null' }), // sorumlu firma
+  employeeId: text('employee_id').references(() => employees.id, { onDelete: 'set null' }), // uygunsuz davranışta bulunan çalışan
   openedById: text('opened_by_id').notNull().references(() => users.id),
   description: text('description').notNull(),
+  correctionSuggestion: text('correction_suggestion'), // açan kişinin önerdiği düzeltme yöntemi
+  riskScore: integer('risk_score'), // 1 (düşük) - 5 (kritik) risk/şiddet skoru
   priority: nonconformityPriorityEnum('priority').notNull().default('ORTA'),
   status: nonconformityStatusEnum('status').notNull().default('ACIK'),
   dueDate: timestamp('due_date', { withTimezone: true }).notNull(), // termin tarihi
   closedAt: timestamp('closed_at', { withTimezone: true }),
+  deadlineReminderSentAt: timestamp('deadline_reminder_sent_at', { withTimezone: true }), // termin %66'sı dolunca gönderilen uyarı
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -282,6 +306,54 @@ const nonconformityStatusHistory = pgTable('nonconformity_status_history', {
   index('nonconformity_status_history_nc_idx').on(table.nonconformityId),
 ]);
 
+/**
+ * Termin süresi geçmiş ve hâlâ kapatılmamış bir uygunsuzluk için açan kişi tarafından talep
+ * edilen cezai işlem. Admin ve "ceza onaylama" yetkisine sahip kişiler onaylar/reddeder.
+ * NOT: "İş akdi feshi" gibi yaptırım türleri yalnızca bir KARAR KAYDIDIR; sistem bunu
+ * otomatik olarak uygulamaz, gerçek dünyadaki idari işlem şirket/İK süreçleriyle yürütülür.
+ */
+const penalties = pgTable('penalties', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  nonconformityId: text('nonconformity_id').notNull().references(() => nonconformities.id, { onDelete: 'cascade' }),
+  employeeId: text('employee_id').references(() => employees.id, { onDelete: 'set null' }),
+  requestedById: text('requested_by_id').notNull().references(() => users.id),
+  requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+  reason: text('reason').notNull(),
+  sanctionType: penaltySanctionEnum('sanction_type').notNull().default('PARA_CEZASI'),
+  suggestedAmount: integer('suggested_amount'), // TL, opsiyonel
+  status: penaltyStatusEnum('status').notNull().default('BEKLEMEDE'),
+  decidedById: text('decided_by_id').references(() => users.id),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  decisionNote: text('decision_note'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('penalties_nonconformity_idx').on(table.nonconformityId),
+  index('penalties_employee_idx').on(table.employeeId),
+  index('penalties_status_idx').on(table.status),
+]);
+
+/**
+ * Tarayıcı Web Push abonelikleri (uygulama/tarayıcı kapalıyken bile bildirim gösterebilmek için).
+ */
+const pushSubscriptions = pgTable('push_subscriptions', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  endpoint: text('endpoint').notNull(),
+  p256dh: text('p256dh').notNull(),
+  auth: text('auth').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('push_subscriptions_endpoint_idx').on(table.endpoint),
+  index('push_subscriptions_user_idx').on(table.userId),
+]);
+
+/** Sistem geneli basit ayarlar (ör. galeriden fotoğraf seçmeye izin verilsin mi). */
+const systemSettings = pgTable('system_settings', {
+  key: text('key').primaryKey(),
+  value: jsonb('value').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // İlişkiler (relational query API için)
 const usersRelations = relations(users, ({ many }) => ({
   companyUsers: many(companyUsers),
@@ -291,6 +363,7 @@ const usersRelations = relations(users, ({ many }) => ({
   openedNonconformities: many(nonconformities, { relationName: 'openedBy' }),
   nonconformityAssignments: many(nonconformityAssignees),
   notifications: many(notifications),
+  pushSubscriptions: many(pushSubscriptions),
 }));
 
 const projectsRelations = relations(projects, ({ many }) => ({
@@ -311,6 +384,7 @@ const companiesRelations = relations(companies, ({ one, many }) => ({
   responsibleBlock: one(projectBlocks, { fields: [companies.responsibleBlockId], references: [projectBlocks.id] }),
   companyUsers: many(companyUsers),
   userProjects: many(userProjects),
+  employees: many(employees),
 }));
 
 const companyUsersRelations = relations(companyUsers, ({ one }) => ({
@@ -347,16 +421,25 @@ const auditLogsRelations = relations(auditLogs, ({ one }) => ({
   user: one(users, { fields: [auditLogs.userId], references: [users.id] }),
 }));
 
+const employeesRelations = relations(employees, ({ one, many }) => ({
+  project: one(projects, { fields: [employees.projectId], references: [projects.id] }),
+  company: one(companies, { fields: [employees.companyId], references: [companies.id] }),
+  nonconformities: many(nonconformities),
+  penalties: many(penalties),
+}));
+
 const nonconformitiesRelations = relations(nonconformities, ({ one, many }) => ({
   project: one(projects, { fields: [nonconformities.projectId], references: [projects.id] }),
   category: one(categories, { fields: [nonconformities.categoryId], references: [categories.id] }),
   block: one(projectBlocks, { fields: [nonconformities.blockId], references: [projectBlocks.id] }),
   company: one(companies, { fields: [nonconformities.companyId], references: [companies.id] }),
+  employee: one(employees, { fields: [nonconformities.employeeId], references: [employees.id] }),
   openedBy: one(users, { fields: [nonconformities.openedById], references: [users.id], relationName: 'openedBy' }),
   assignees: many(nonconformityAssignees),
   photos: many(nonconformityPhotos),
   corrections: many(nonconformityCorrections),
   history: many(nonconformityStatusHistory),
+  penalties: many(penalties),
 }));
 
 const nonconformityAssigneesRelations = relations(nonconformityAssignees, ({ one }) => ({
@@ -387,6 +470,17 @@ const notificationsRelations = relations(notifications, ({ one }) => ({
   nonconformity: one(nonconformities, { fields: [notifications.nonconformityId], references: [nonconformities.id] }),
 }));
 
+const penaltiesRelations = relations(penalties, ({ one }) => ({
+  nonconformity: one(nonconformities, { fields: [penalties.nonconformityId], references: [nonconformities.id] }),
+  employee: one(employees, { fields: [penalties.employeeId], references: [employees.id] }),
+  requestedBy: one(users, { fields: [penalties.requestedById], references: [users.id] }),
+  decidedBy: one(users, { fields: [penalties.decidedById], references: [users.id] }),
+}));
+
+const pushSubscriptionsRelations = relations(pushSubscriptions, ({ one }) => ({
+  user: one(users, { fields: [pushSubscriptions.userId], references: [users.id] }),
+}));
+
 module.exports = {
   companyTypeEnum,
   projectStatusEnum,
@@ -394,6 +488,8 @@ module.exports = {
   nonconformityPriorityEnum,
   nonconformityPhotoTypeEnum,
   correctionStatusEnum,
+  penaltySanctionEnum,
+  penaltyStatusEnum,
   users,
   projects,
   projectBlocks,
@@ -405,12 +501,16 @@ module.exports = {
   userPermissions,
   categories,
   auditLogs,
+  employees,
   nonconformities,
   nonconformityAssignees,
   notifications,
   nonconformityCorrections,
   nonconformityPhotos,
   nonconformityStatusHistory,
+  penalties,
+  pushSubscriptions,
+  systemSettings,
   usersRelations,
   projectsRelations,
   projectBlocksRelations,
@@ -428,4 +528,7 @@ module.exports = {
   nonconformityCorrectionsRelations,
   nonconformityPhotosRelations,
   nonconformityStatusHistoryRelations,
+  employeesRelations,
+  penaltiesRelations,
+  pushSubscriptionsRelations,
 };

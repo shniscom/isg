@@ -100,6 +100,38 @@ Ayrica `docker-compose.yml` artik `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
 `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` degiskenlerini zorunlu kilar (`:?` sozdizimi);
 bunlar Coolify Environment Variables bolumune eklenmeden deploy basarisiz olur.
 
+## 5c. Push Bildirimleri (VAPID)
+
+Uygulama kapaliyken/arka plandayken de bildirim gonderebilmek icin Web Push (VAPID)
+kullanilir. Bu degiskenler zorunlu degildir - tanimlanmazsa uygulama normal calismaya
+devam eder, sadece push bildirimleri sessizce devre disi kalir (uygulama ici bildirimler
+ve NotificationBell yine calisir).
+
+Coolify Environment Variables bolumune su degerleri ekleyin:
+
+```
+VAPID_PUBLIC_KEY=BPY2DNpceuakh_rRhDp9zCSB8pmteGICINH4d7f1X5szKB5vpyzAI-ntLsFYN7rCUnUlg1U5bj3iefuCG-oJ7EQ
+VAPID_PRIVATE_KEY=h51hnKTRA6cgYFle_WdLUe9hATeTECUEGErp51VRmB8
+VAPID_SUBJECT=mailto:destek@isg.shnai.cloud
+```
+
+Bu ornek anahtarlar bu proje icin uretilmis gercek bir VAPID cift anahtaridir ve
+dogrudan kullanilabilir; isterseniz kendi anahtarinizi da uretebilirsiniz:
+
+```bash
+node -e "console.log(require('web-push').generateVAPIDKeys())"
+```
+
+Notlar:
+- Push bildirimi almak icin kullanici, uygulamayi actiktan sonra tarayicinin
+  bildirim izni istemini onaylamalidir (Layout ilk yuklendiginde otomatik sorar).
+- iOS'ta push bildirimleri yalnizca uygulama ana ekrana eklenmisse (PWA olarak
+  yuklenmisse) calisir; Safari sekmesinde acikken calismaz. Bu Apple'in kendi
+  kisitlamasidir, uygulama tarafinda cozulebilecek bir durum degildir.
+- Gercek cihazda son testi (bildirim gelip gelmedigi, tiklaninca dogru sayfaya
+  gitmesi) yayina alindiktan sonra yapilmalidir; tarayici/isletim sistemi izinleri
+  gelistirme ortaminda tam simule edilemez.
+
 ## 6. Yedekleme
 
 `postgres` verisi `isg_postgres_data` adli bir Docker volume icinde tutulur. Coolify

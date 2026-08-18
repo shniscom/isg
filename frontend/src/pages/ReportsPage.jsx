@@ -56,16 +56,17 @@ export function ReportsPage() {
 
   function handleExport() {
     if (!report) return;
-    downloadCsv(
-      [
-        ['Dönem', RANGE_LABELS[report.range]],
-        ['Projede açılan toplam', report.totalOpened],
-        ['Kendi açtığım', report.myOpened],
-        ['Bana atanan', report.myAssigned],
-        ['Kapattığım', report.myClosed],
-      ],
-      `rapor-${report.range}-${new Date().toISOString().slice(0, 10)}.csv`
-    );
+    const rows = [
+      ['Dönem', RANGE_LABELS[report.range]],
+      ['Projede açılan toplam', report.totalOpened],
+      ['Kendi açtığım', report.myOpened],
+      ['Bana atanan', report.myAssigned],
+      ['Kapattığım', report.myClosed],
+      [],
+      ['Firma', 'Açılan', 'Kapatılan'],
+      ...(report.companyBreakdown || []).map((c) => [c.companyName, c.opened, c.closed]),
+    ];
+    downloadCsv(rows, `rapor-${report.range}-${new Date().toISOString().slice(0, 10)}.csv`);
   }
 
   return (
@@ -126,6 +127,32 @@ export function ReportsPage() {
             <div className="mt-1 text-sm text-slate-500">Bu dönemde kapattığım uygunsuzluk</div>
           </Card>
         </div>
+      )}
+
+      {report?.companyBreakdown?.length > 0 && (
+        <Card>
+          <h2 className="mb-3 font-semibold text-slate-800">Firma Bazlı Kırılım</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-xs uppercase text-slate-400">
+                  <th className="py-2 pr-4">Firma</th>
+                  <th className="py-2 pr-4">Açılan</th>
+                  <th className="py-2 pr-4">Kapatılan</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.companyBreakdown.map((c) => (
+                  <tr key={c.companyId || 'none'} className="border-b border-slate-100">
+                    <td className="py-2 pr-4 text-slate-800">{c.companyName}</td>
+                    <td className="py-2 pr-4">{c.opened}</td>
+                    <td className="py-2 pr-4 text-emerald-700">{c.closed}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       )}
     </div>
   );

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import apiClient, { getErrorMessage } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { Card, Button, Textarea, Alert, Badge } from '../components/ui';
+import { Card, Button, Textarea, Select, Input, Alert, Badge } from '../components/ui';
 import { PhotoUploader } from '../components/PhotoUploader';
 import { PhotoGallery } from '../components/PhotoGallery';
 import {
@@ -10,6 +10,11 @@ import {
   STATUS_BADGE_VARIANT,
   PRIORITY_LABELS,
   PRIORITY_BADGE_VARIANT,
+  RISK_SCORE_LABELS,
+  PENALTY_STATUS_LABELS,
+  PENALTY_STATUS_BADGE_VARIANT,
+  PENALTY_SANCTION_LABELS,
+  riskScoreSuggestedPenaltyAmount,
   formatDateTime,
   remainingDaysLabel,
 } from '../lib/nonconformity';
@@ -41,6 +46,11 @@ export function NonconformityDetailPage() {
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [reviewing, setReviewing] = useState(false);
 
+  // Ceza talebi
+  const [showPenaltyForm, setShowPenaltyForm] = useState(false);
+  const [penaltyForm, setPenaltyForm] = useState({ reason: '', sanctionType: 'PARA_CEZASI', suggestedAmount: '' });
+  const [penaltySubmitting, setPenaltySubmitting] = useState(false);
+
   async function load() {
     try {
       const { data } = await apiClient.get(`/nonconformities/${id}`);
@@ -58,7 +68,7 @@ export function NonconformityDetailPage() {
   if (error) return <Alert>{error}</Alert>;
   if (!data) return <p className="text-sm text-slate-500">Yükleniyor...</p>;
 
-  const { nonconformity: nc, photos, corrections, history } = data;
+  const { nonconformity: nc, photos, corrections, history, penalties } = data;
   const isAssignee = (nc.assignees || []).some((a) => a.userId === user?.id);
   const canReview = hasPermission('uygunsuzluk_onaylama');
   const pendingCorrection = corrections.find((c) => c.status === 'BEKLEMEDE');
@@ -115,6 +125,31 @@ export function NonconformityDetailPage() {
     }
   }
 
+  async function handleRequestPenalty(e) {
+    e.preventDefault();
+    setPenaltySubmitting(true);
+    setError(null);
+    try {
+      const { data: result } = await apiClient.post(`/nonconformities/${id}/penalty-request`, {
+        reason: penaltyForm.reason,
+        sanctionType: penaltyForm.sanctionType,
+        suggestedAmount: penaltyForm.suggestedAmount ? Number(penaltyForm.suggestedAmount) : null,
+      });
+      let noticeMsg = 'Cezai işlem talebi oluşturuldu, onay bekliyor.';
+      if (result.employeePriorApprovedCount > 0) {
+        noticeMsg += ` Uyarı: bu çalışan için ${result.employeePriorApprovedCount} adet daha önce onaylanmış ceza kaydı var.`;
+      }
+      setNotice(noticeMsg);
+      setShowPenaltyForm(false);
+      setPenaltyForm({ reason: '', sanctionType: 'PARA_CEZASI', suggestedAmount: '' });
+      await load();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setPenaltySubmitting(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <Link to="/uygunsuzluklar" className="text-sm text-brand-700 hover:underline">
@@ -155,7 +190,21 @@ export function NonconformityDetailPage() {
           <InfoRow label="Açılış Tarihi" value={formatDateTime(nc.createdAt)} />
           <InfoRow label="Termin Tarihi" value={formatDateTime(nc.dueDate)} />
           {nc.closedAt && <InfoRow label="Kapanış Tarihi" value={formatDateTime(nc.closedAt)} />}
+          {nc.riskScore && <InfoRow label="Risk / Şiddet Skoru" value={RISK_SCORE_LABELS[nc.riskScore]} />}
+          {nc.employeeName && (
+            <InfoRow
+              label="İlgili Çalışan"
+              value={nc.employeeNationalId ? `${nc.employeeName} (${nc.employeeNationalId})` : nc.employeeName}
+            />
+          )}
         </dl>
+
+        {nc.correctionSuggestion && (
+          <div className="mt-4 border-t border-slate-100 pt-4">
+            <h3 className="mb-1 text-sm font-semibold text-slate-700">Düzeltme Önerisi</h3>
+            <p className="whitespace-pre-wrap text-sm text-slate-600">{nc.correctionSuggestion}</p>
+          </div>
+        )}
 
         <div className="mt-4 border-t border-slate-100 pt-4">
           <h3 className="mb-2 text-sm font-semibold text-slate-700">Fotoğraflar</h3>
@@ -227,6 +276,96 @@ export function NonconformityDetailPage() {
                 </Button>
               </div>
             </form>
+          )}
+        </Card>
+      )}
+
+      {/* Cezai işlem talepleri */}
+      {(penalties?.length > 0 || nc.canRequestPenalty) && (
+        <Card>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="font-semibold text-slate-800">Cezai İşlem</h2>
+            {nc.canRequestPenalty && !showPenaltyForm && (
+              <Button variant="danger" onClick={() => setShowPenaltyForm(true)}>
+                Cezai İşlem Talep Et
+              </Button>
+            )}
+          </div>
+
+          {nc.canRequestPenalty && (
+            <p className="mb-3 text-xs text-slate-500">
+              Termin süresi doldu ve uygunsuzluk hâlâ kapatılmadı. Cezai işlem talebi admine ve ceza onaylama
+              yetkisi olan kişilere onay için gönderilir; bu yalnızca bir talep kaydıdır, otomatik bir işlem
+              uygulanmaz.
+            </p>
+          )}
+
+          {showPenaltyForm && (
+            <form onSubmit={handleRequestPenalty} className="mb-4 space-y-3 rounded-xl border border-red-200 bg-red-50 p-4">
+              <Textarea
+                label="Gerekçe"
+                value={penaltyForm.reason}
+                onChange={(e) => setPenaltyForm({ ...penaltyForm, reason: e.target.value })}
+                placeholder="Termin süresi aşıldı, uygunsuzluk hâlâ açık..."
+                required
+              />
+              <Select
+                label="Yaptırım Türü"
+                value={penaltyForm.sanctionType}
+                onChange={(e) => {
+                  const sanctionType = e.target.value;
+                  const suggested = riskScoreSuggestedPenaltyAmount(nc.riskScore);
+                  setPenaltyForm({
+                    ...penaltyForm,
+                    sanctionType,
+                    suggestedAmount: sanctionType === 'PARA_CEZASI' && suggested ? String(suggested) : penaltyForm.suggestedAmount,
+                  });
+                }}
+              >
+                {Object.entries(PENALTY_SANCTION_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </Select>
+              {penaltyForm.sanctionType === 'PARA_CEZASI' && (
+                <Input
+                  label="Önerilen Tutar (TL, opsiyonel)"
+                  type="number"
+                  min="0"
+                  value={penaltyForm.suggestedAmount}
+                  onChange={(e) => setPenaltyForm({ ...penaltyForm, suggestedAmount: e.target.value })}
+                />
+              )}
+              <div className="flex gap-3">
+                <Button type="submit" variant="danger" disabled={penaltySubmitting}>
+                  {penaltySubmitting ? 'Gönderiliyor...' : 'Talebi Gönder'}
+                </Button>
+                <Button type="button" variant="secondary" onClick={() => setShowPenaltyForm(false)}>
+                  Vazgeç
+                </Button>
+              </div>
+            </form>
+          )}
+
+          {penalties?.length > 0 && (
+            <div className="space-y-2">
+              {penalties.map((p) => (
+                <div key={p.id} className="rounded-xl bg-slate-50 px-4 py-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant={PENALTY_STATUS_BADGE_VARIANT[p.status]}>{PENALTY_STATUS_LABELS[p.status]}</Badge>
+                    <span className="text-sm font-medium text-slate-800">{PENALTY_SANCTION_LABELS[p.sanctionType]}</span>
+                    {p.suggestedAmount && <span className="text-sm text-slate-500">{p.suggestedAmount} TL</span>}
+                  </div>
+                  <p className="mt-1 text-sm text-slate-600">{p.reason}</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {p.requestedByName} tarafından {formatDateTime(p.requestedAt)} tarihinde talep edildi.
+                    {p.decidedByName && ` ${p.decidedByName} tarafından ${formatDateTime(p.decidedAt)} tarihinde karara bağlandı.`}
+                  </p>
+                  {p.decisionNote && <p className="mt-1 text-xs text-slate-500">Not: {p.decisionNote}</p>}
+                </div>
+              ))}
+            </div>
           )}
         </Card>
       )}

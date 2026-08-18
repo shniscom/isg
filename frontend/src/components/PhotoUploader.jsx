@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import apiClient from '../api/client';
 import { Alert, Spinner } from './ui';
 
@@ -9,11 +9,28 @@ import { Alert, Spinner } from './ui';
 export function PhotoUploader({ photos, onChange, disabled }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
+  const [settings, setSettings] = useState({ allowGallerySelect: false, maxPhotosPerUpload: 5 });
+
+  useEffect(() => {
+    apiClient
+      .get('/settings')
+      .then(({ data }) => setSettings(data.settings))
+      .catch(() => {});
+  }, []);
+
+  const remainingSlots = Math.max(0, settings.maxPhotosPerUpload - (photos || []).length);
+  const limitReached = remainingSlots === 0;
 
   async function handleFiles(fileList) {
-    const files = Array.from(fileList || []);
+    let files = Array.from(fileList || []);
     if (files.length === 0) return;
-    setError(null);
+    if (files.length > remainingSlots) {
+      setError(`En fazla ${settings.maxPhotosPerUpload} fotoğraf yükleyebilirsiniz. ${remainingSlots} fotoğraf daha ekleyebilirsiniz.`);
+      files = files.slice(0, remainingSlots);
+      if (files.length === 0) return;
+    } else {
+      setError(null);
+    }
     setUploading(true);
     try {
       const uploaded = [];
@@ -44,8 +61,9 @@ export function PhotoUploader({ photos, onChange, disabled }) {
     onChange((photos || []).filter((p) => p.key !== key));
   }
 
+  const isDisabled = disabled || uploading || limitReached;
   const inputBaseClass = `flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 px-4 py-3 text-sm font-medium text-slate-600 transition hover:border-brand-400 hover:bg-brand-50 ${
-    disabled || uploading ? 'pointer-events-none opacity-50' : 'cursor-pointer'
+    isDisabled ? 'pointer-events-none opacity-50' : 'cursor-pointer'
   }`;
 
   return (
@@ -55,6 +73,9 @@ export function PhotoUploader({ photos, onChange, disabled }) {
           <Alert>{error}</Alert>
         </div>
       )}
+      <p className="mb-2 text-xs text-slate-500">
+        {(photos || []).length} / {settings.maxPhotosPerUpload} fotoğraf
+      </p>
       <div className="flex flex-col gap-2 sm:flex-row">
         <label className={inputBaseClass}>
           {uploading ? (
@@ -70,33 +91,35 @@ export function PhotoUploader({ photos, onChange, disabled }) {
             multiple
             capture="environment"
             className="hidden"
-            disabled={disabled || uploading}
+            disabled={isDisabled}
             onChange={(e) => {
               handleFiles(e.target.files);
               e.target.value = '';
             }}
           />
         </label>
-        <label className={inputBaseClass}>
-          {uploading ? (
-            <>
-              <Spinner className="h-4 w-4" /> Yükleniyor...
-            </>
-          ) : (
-            <>🖼️ Galeriden Seç</>
-          )}
-          <input
-            type="file"
-            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
-            multiple
-            className="hidden"
-            disabled={disabled || uploading}
-            onChange={(e) => {
-              handleFiles(e.target.files);
-              e.target.value = '';
-            }}
-          />
-        </label>
+        {settings.allowGallerySelect && (
+          <label className={inputBaseClass}>
+            {uploading ? (
+              <>
+                <Spinner className="h-4 w-4" /> Yükleniyor...
+              </>
+            ) : (
+              <>🖼️ Galeriden Seç</>
+            )}
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+              multiple
+              className="hidden"
+              disabled={isDisabled}
+              onChange={(e) => {
+                handleFiles(e.target.files);
+                e.target.value = '';
+              }}
+            />
+          </label>
+        )}
       </div>
 
       {(photos || []).length > 0 && (

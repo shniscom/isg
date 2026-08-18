@@ -32,6 +32,9 @@ services:
       R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:?R2_ACCESS_KEY_ID zorunludur}
       R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:?R2_SECRET_ACCESS_KEY zorunludur}
       R2_BUCKET_NAME: ${R2_BUCKET_NAME:-isg-takip-fotograflar}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:destek@isg.shnai.cloud}
 
   frontend:
     build:
