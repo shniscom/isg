@@ -63,19 +63,32 @@ export function NewNonconformityPage() {
     if (!activeProjectId) return;
     const params = user?.isSystemAdmin ? { projectId: activeProjectId } : {};
     setRefData(null);
-    setUsers(null);
-    setAssignedUserIds([]);
-    Promise.all([
-      apiClient.get('/nonconformities/reference-data', { params }),
-      apiClient.get('/nonconformities/assignable-users', { params }),
-    ])
-      .then(([refRes, usersRes]) => {
-        setRefData(refRes.data);
-        setUsers(usersRes.data.users);
-      })
+    apiClient
+      .get('/nonconformities/reference-data', { params })
+      .then(({ data }) => setRefData(data))
       .catch((err) => setError(getErrorMessage(err)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProjectId]);
+
+  // Atanabilir kişi listesi, seçilen sorumlu firmaya göre daraltılır: yalnızca o firmaya özel
+  // atanmış kişiler + proje genelinde (tüm firmalar kapsamında) atanmış kişiler listelenir.
+  // Böylece ilgisiz bir firmanın çalışanına yanlışlıkla atama yapılması önlenir.
+  useEffect(() => {
+    if (!activeProjectId) return;
+    const params = user?.isSystemAdmin ? { projectId: activeProjectId } : {};
+    if (form.companyId) params.companyId = form.companyId;
+    setUsers(null);
+    apiClient
+      .get('/nonconformities/assignable-users', { params })
+      .then(({ data }) => {
+        setUsers(data.users);
+        // Firma değişince artık listede olmayan seçimler otomatik kaldırılır.
+        const validIds = new Set(data.users.map((u) => u.userId));
+        setAssignedUserIds((prev) => prev.filter((id) => validIds.has(id)));
+      })
+      .catch((err) => setError(getErrorMessage(err)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProjectId, form.companyId]);
 
   // Sorumlu firma seçilince, o firmanın kayıtlı çalışanları listelenir (mükerrer kayıt önlemek için).
   useEffect(() => {
@@ -323,8 +336,13 @@ export function NewNonconformityPage() {
 
           <div>
             <span className="mb-1.5 block text-sm font-medium text-slate-700">Atanan Kişi(ler)</span>
+            <p className="mb-1.5 text-xs text-slate-500">
+              {form.companyId
+                ? 'Yalnızca seçili sorumlu firmaya atanmış kişiler ve proje genelinde yetkili olanlar listelenir.'
+                : 'Önce sorumlu firmayı seçerseniz liste yalnızca o firmayla ilgili kişilere daralır.'}
+            </p>
             {users && users.length === 0 && (
-              <p className="text-sm text-slate-400">Bu projede atanabilir kullanıcı yok.</p>
+              <p className="text-sm text-slate-400">Bu kapsamda atanabilir kullanıcı yok.</p>
             )}
             <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-slate-300 p-2">
               {users?.map((u) => (

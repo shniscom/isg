@@ -136,19 +136,42 @@ router.get(
   requirePermission('uygunsuzluk_acma'),
   asyncHandler(async (req, res) => {
     const projectId = resolveProjectId(req, req.query.projectId);
+    // ?companyId= verilirse yalnızca o firmaya özel atanmış kişiler + proje genelinde (tüm
+    // firmalar kapsamında) atanmış kişiler listelenir. Böylece bir uygunsuzluk belirli bir
+    // firmaya açıldığında, o firmayla ilgisi olmayan kişiler atanabilir listede görünmez.
+    const companyId = req.query.companyId || null;
+
+    const conditions = [eq(userProjects.projectId, projectId), eq(userProjects.isActive, true), eq(users.isActive, true)];
+    if (companyId) {
+      conditions.push(or(eq(userProjects.companyId, companyId), isNull(userProjects.companyId)));
+    }
 
     const rows = await db
       .select({
         userId: users.id,
         fullName: users.fullName,
         roleName: roles.name,
+        companyId: userProjects.companyId,
       })
       .from(userProjects)
       .innerJoin(users, eq(userProjects.userId, users.id))
       .innerJoin(roles, eq(userProjects.roleId, roles.id))
-      .where(and(eq(userProjects.projectId, projectId), eq(userProjects.isActive, true), eq(users.isActive, true)));
+      .where(and(...conditions));
 
-    res.json({ users: rows });
+    // Aynı kullanıcının bu projede birden fazla ataması olabilir (ör. hem genel hem de belirli
+    // bir firmaya özel). Listede tek satır göstermek için tekilleştirilir; firma bazlı eşleşme
+    // varsa o tercih edilir (daha net bir rol/kapsam ifade eder).
+    const byUser = new Map();
+    for (const row of rows) {
+      const isCompanySpecific = row.companyId !== null;
+      const existing = byUser.get(row.userId);
+      if (!existing || (isCompanySpecific && !existing.isCompanySpecific)) {
+        byUser.set(row.userId, { userId: row.userId, fullName: row.fullName, roleName: row.roleName, isCompanySpecific });
+      }
+    }
+
+    const result = [...byUser.values()].map(({ isCompanySpecific, ...rest }) => rest);
+    res.json({ users: result });
   })
 );
 
