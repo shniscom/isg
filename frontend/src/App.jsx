@@ -20,6 +20,7 @@ import { CategoriesPage } from './pages/admin/CategoriesPage';
 import { NonconformitiesListPage } from './pages/NonconformitiesListPage';
 import { NewNonconformityPage } from './pages/NewNonconformityPage';
 import { NonconformityDetailPage } from './pages/NonconformityDetailPage';
+import { ReportsPage } from './pages/ReportsPage';
 
 function PublicOnlyRoute({ children, expectedStatus }) {
   const { status } = useAuth();
@@ -74,6 +75,7 @@ function AppRoutes() {
         <Route path="/uygunsuzluklar" element={<NonconformitiesListPage />} />
         <Route path="/uygunsuzluklar/yeni" element={<NewNonconformityPage />} />
         <Route path="/uygunsuzluklar/:id" element={<NonconformityDetailPage />} />
+        <Route path="/raporlar" element={<ReportsPage />} />
 
         <Route
           path="/admin/projeler"

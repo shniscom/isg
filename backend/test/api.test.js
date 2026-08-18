@@ -51,6 +51,8 @@ test.before(async () => {
     { key: 'uygunsuzluk_acma', name: 'Uygunsuzluk Açma' },
     { key: 'uygunsuzluk_duzeltme', name: 'Uygunsuzluk Düzeltme' },
     { key: 'uygunsuzluk_onaylama', name: 'Uygunsuzluk Kapatma / Onaylama' },
+    { key: 'rapor_goruntuleme', name: 'Rapor Görüntüleme' },
+    { key: 'rapor_alma', name: 'Rapor Alma (Excel/PDF)' },
     { key: 'proje_yonetme', name: 'Proje Yönetme' },
     { key: 'kullanici_yonetme', name: 'Kullanıcı Yönetme' },
     { key: 'firma_yonetme', name: 'Firma Yönetme' },
@@ -563,4 +565,63 @@ test('yetki değişikliği yeniden giriş yapmadan aynı token ile anında etkil
     body: { description: 'test açıklama 2', assignedUserIds: [userId], dueDate: new Date(Date.now() + 86400000).toISOString() },
   });
   assert.equal(afterRevoke.status, 403);
+});
+
+// ---------------------------------------------------------------------------
+// Rapor uç noktası: günlük/haftalık/aylık özet istatistikler
+// ---------------------------------------------------------------------------
+test('rapor: yetkisi olan kullanıcı kendi istatistiklerini görür, olmayan 403 alır', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Test Şantiyesi 4', code: 'TST-004' } });
+  const projectId = proj.body.project.id;
+
+  const rolesRes = await api('GET', '/admin/roles', { token: adminToken });
+  const formenRoleId = rolesRes.body.roles.find((r) => r.name === 'Formen').id;
+
+  const permsRes = await api('GET', '/admin/permissions', { token: adminToken });
+  const permId = (key) => permsRes.body.permissions.find((p) => p.key === key).id;
+
+  const userCreate = await api('POST', '/admin/users', {
+    token: adminToken,
+    body: { fullName: 'Rapor Testi', username: 'rapor.testi' },
+  });
+  const userId = userCreate.body.user.id;
+  await api('POST', `/admin/users/${userId}/projects`, { token: adminToken, body: { projectId, roleId: formenRoleId } });
+  await api('POST', `/admin/users/${userId}/permissions`, { token: adminToken, body: { permissionId: permId('uygunsuzluk_acma'), projectId } });
+
+  const login = await api('POST', '/auth/login', { body: { username: 'rapor.testi', password: userCreate.body.tempPassword } });
+  const select = await api('POST', '/auth/select-context', {
+    body: { contextToken: login.body.contextToken, projectId, roleId: formenRoleId },
+  });
+  const token = select.body.accessToken;
+
+  // rapor_goruntuleme yetkisi henüz yok -> 403
+  const forbidden = await api('GET', '/nonconformities/report?range=today', { token });
+  assert.equal(forbidden.status, 403);
+
+  // Bir uygunsuzluk açar (kendine atar)
+  const createNc = await api('POST', '/nonconformities', {
+    token,
+    body: {
+      description: 'Rapor testi için uygunsuzluk',
+      assignedUserIds: [userId],
+      dueDate: new Date(Date.now() + 86400000).toISOString(),
+    },
+  });
+  assert.equal(createNc.status, 201);
+
+  // Admin rapor_goruntuleme yetkisini verir
+  await api('POST', `/admin/users/${userId}/permissions`, { token: adminToken, body: { permissionId: permId('rapor_goruntuleme'), projectId } });
+
+  const report = await api('GET', '/nonconformities/report?range=today', { token });
+  assert.equal(report.status, 200);
+  assert.equal(report.body.range, 'today');
+  assert.ok(report.body.totalOpened >= 1);
+  assert.ok(report.body.myOpened >= 1);
+  assert.ok(report.body.myAssigned >= 1);
+  assert.equal(report.body.myClosed, 0);
+
+  // Admin, projectId belirterek herhangi bir projenin raporuna erişebilir
+  const adminReport = await api('GET', `/nonconformities/report?range=month&projectId=${projectId}`, { token: adminToken });
+  assert.equal(adminReport.status, 200);
+  assert.ok(adminReport.body.totalOpened >= 1);
 });

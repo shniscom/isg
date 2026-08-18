@@ -7,6 +7,7 @@ import { PERMISSION_DESCRIPTIONS } from '../../lib/permissions';
 export function UserDetailPage() {
   const { id } = useParams();
   const [user, setUser] = useState(null);
+  const [stats, setStats] = useState(null);
   const [assignments, setAssignments] = useState([]);
   const [permissions, setPermissions] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -33,6 +34,7 @@ export function UserDetailPage() {
         apiClient.get('/admin/permissions'),
       ]);
       setUser(userRes.data.user);
+      setStats(userRes.data.stats);
       setAssignments(userRes.data.assignments);
       setPermissions(userRes.data.permissions);
       setProjects(projectsRes.data.projects);
@@ -104,6 +106,14 @@ export function UserDetailPage() {
     await load();
   }
 
+  // Seçili kapsam (proje ya da genel) için kullanıcıya zaten verilmiş olan yetkiler,
+  // "verilecek yetkiler" listesinden çıkarılır - aynı yetki iki kez verilemez/anlamsızdır.
+  const currentScopeProjectId = grantProjectId || null;
+  const alreadyGrantedPermissionIds = new Set(
+    permissions.filter((p) => (p.projectId || null) === currentScopeProjectId).map((p) => p.permissionId)
+  );
+  const grantablePermissions = allPermissions.filter((p) => !alreadyGrantedPermissionIds.has(p.id));
+
   function toggleGrantPermission(permId) {
     setGrantPermissionIds((prev) =>
       prev.includes(permId) ? prev.filter((p) => p !== permId) : [...prev, permId]
@@ -112,7 +122,7 @@ export function UserDetailPage() {
 
   function toggleSelectAllPermissions() {
     setGrantPermissionIds((prev) =>
-      prev.length === allPermissions.length ? [] : allPermissions.map((p) => p.id)
+      prev.length === grantablePermissions.length ? [] : grantablePermissions.map((p) => p.id)
     );
   }
 
@@ -172,6 +182,26 @@ export function UserDetailPage() {
       <p className="text-sm text-slate-500">@{user.username}</p>
 
       {notice && <Alert variant="success">{notice}</Alert>}
+
+      {!user.isSystemAdmin && stats && (
+        <Card>
+          <h2 className="mb-3 font-semibold text-slate-800">Uygunsuzluk İstatistikleri</h2>
+          <div className="grid grid-cols-3 gap-3 text-center">
+            <div className="rounded-xl border border-slate-200 p-3">
+              <div className="text-2xl font-bold text-slate-800">{stats.opened}</div>
+              <div className="text-xs text-slate-500">Açtığı</div>
+            </div>
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+              <div className="text-2xl font-bold text-emerald-700">{stats.closed}</div>
+              <div className="text-xs text-emerald-700">Kapattığı</div>
+            </div>
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+              <div className="text-2xl font-bold text-amber-700">{stats.assignedOpen}</div>
+              <div className="text-xs text-amber-700">Üzerinde Açık</div>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <Card>
         <div className="flex items-center justify-between">
@@ -278,16 +308,23 @@ export function UserDetailPage() {
         <form onSubmit={handleGrantPermission} className="space-y-4">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-slate-700">Verilecek Yetkiler</span>
-            <button
-              type="button"
-              onClick={toggleSelectAllPermissions}
-              className="text-sm font-medium text-brand-700 hover:underline"
-            >
-              {grantPermissionIds.length === allPermissions.length ? 'Tümünü Kaldır' : 'Tümünü Seç'}
-            </button>
+            {grantablePermissions.length > 0 && (
+              <button
+                type="button"
+                onClick={toggleSelectAllPermissions}
+                className="text-sm font-medium text-brand-700 hover:underline"
+              >
+                {grantPermissionIds.length === grantablePermissions.length ? 'Tümünü Kaldır' : 'Tümünü Seç'}
+              </button>
+            )}
           </div>
+          {grantablePermissions.length === 0 ? (
+            <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+              Bu kapsam için tanımlı tüm yetkiler zaten verilmiş.
+            </p>
+          ) : (
           <div className="max-h-80 space-y-1 overflow-y-auto rounded-xl border border-slate-200 p-2">
-            {allPermissions.map((p) => (
+            {grantablePermissions.map((p) => (
               <label
                 key={p.id}
                 className="flex cursor-pointer items-start gap-3 rounded-lg px-3 py-2 hover:bg-slate-50"
@@ -307,9 +344,17 @@ export function UserDetailPage() {
               </label>
             ))}
           </div>
+          )}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
             <div className="flex-1">
-              <Select label="Kapsam" value={grantProjectId} onChange={(e) => setGrantProjectId(e.target.value)}>
+              <Select
+                label="Kapsam"
+                value={grantProjectId}
+                onChange={(e) => {
+                  setGrantProjectId(e.target.value);
+                  setGrantPermissionIds([]);
+                }}
+              >
                 <option value="">Tüm Projeler (Genel)</option>
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>

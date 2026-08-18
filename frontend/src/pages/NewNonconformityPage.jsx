@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import apiClient, { getErrorMessage } from '../api/client';
+import { useAuth } from '../context/AuthContext';
 import { Card, Button, Select, Textarea, Alert } from '../components/ui';
 import { PhotoUploader } from '../components/PhotoUploader';
 import { PRIORITY_LABELS } from '../lib/nonconformity';
@@ -14,12 +15,19 @@ function defaultDueDate() {
 
 export function NewNonconformityPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [refData, setRefData] = useState(null);
   const [users, setUsers] = useState(null);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [photos, setPhotos] = useState([]);
   const [assignedUserIds, setAssignedUserIds] = useState([]);
+
+  // Sistem admini belirli bir projeye önceden bağlı olmadığından, uygunsuzluk açmadan
+  // önce hangi proje için açtığını seçmesi gerekir.
+  const [adminProjects, setAdminProjects] = useState(null);
+  const [adminProjectId, setAdminProjectId] = useState('');
+  const activeProjectId = user?.isSystemAdmin ? adminProjectId : 'self';
 
   const [form, setForm] = useState({
     categoryId: '',
@@ -31,17 +39,43 @@ export function NewNonconformityPage() {
   });
 
   useEffect(() => {
-    Promise.all([apiClient.get('/nonconformities/reference-data'), apiClient.get('/nonconformities/assignable-users')])
+    if (user?.isSystemAdmin) {
+      apiClient
+        .get('/admin/projects')
+        .then(({ data }) => {
+          setAdminProjects(data.projects);
+          if (data.projects.length > 0) setAdminProjectId(data.projects[0].id);
+        })
+        .catch((err) => setError(getErrorMessage(err)));
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!activeProjectId) return;
+    const params = user?.isSystemAdmin ? { projectId: activeProjectId } : {};
+    setRefData(null);
+    setUsers(null);
+    setAssignedUserIds([]);
+    Promise.all([
+      apiClient.get('/nonconformities/reference-data', { params }),
+      apiClient.get('/nonconformities/assignable-users', { params }),
+    ])
       .then(([refRes, usersRes]) => {
         setRefData(refRes.data);
         setUsers(usersRes.data.users);
       })
       .catch((err) => setError(getErrorMessage(err)));
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProjectId]);
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
+
+    if (user?.isSystemAdmin && !adminProjectId) {
+      setError('Proje seçilmelidir.');
+      return;
+    }
 
     if (assignedUserIds.length === 0) {
       setError('En az bir atanan kişi seçilmelidir.');
@@ -52,6 +86,7 @@ export function NewNonconformityPage() {
     try {
       const { data } = await apiClient.post('/nonconformities', {
         ...form,
+        projectId: user?.isSystemAdmin ? adminProjectId : undefined,
         categoryId: form.categoryId || null,
         blockId: form.blockId || null,
         companyId: form.companyId || null,
@@ -77,6 +112,17 @@ export function NewNonconformityPage() {
       <Card>
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && <Alert>{error}</Alert>}
+
+          {user?.isSystemAdmin && adminProjects && (
+            <Select label="Proje" value={adminProjectId} onChange={(e) => setAdminProjectId(e.target.value)} required>
+              <option value="">Seçiniz</option>
+              {adminProjects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
+          )}
 
           <Textarea
             label="Açıklama"

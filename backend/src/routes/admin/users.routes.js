@@ -2,8 +2,8 @@ const express = require('express');
 const crypto = require('crypto');
 const { z } = require('zod');
 const { db } = require('../../db/client');
-const { users, userProjects, userPermissions, projects, roles, permissions, companies } = require('../../db/schema');
-const { eq, and, isNull } = require('drizzle-orm');
+const { users, userProjects, userPermissions, projects, roles, permissions, companies, nonconformities, nonconformityAssignees } = require('../../db/schema');
+const { eq, and, isNull, count, inArray } = require('drizzle-orm');
 const { asyncHandler } = require('../../utils/asyncHandler');
 const { ApiError } = require('../../utils/apiError');
 const { requirePermission } = require('../../middleware/permission');
@@ -43,7 +43,27 @@ router.get(
       })
       .from(users)
       .orderBy(users.createdAt);
-    res.json({ users: rows });
+
+    // Her kullanıcının açtığı / kapattığı uygunsuzluk sayıları (tüm projeler dahil).
+    const [openedCounts, closedCounts] = await Promise.all([
+      db.select({ userId: nonconformities.openedById, value: count() }).from(nonconformities).groupBy(nonconformities.openedById),
+      db
+        .select({ userId: nonconformityAssignees.userId, value: count() })
+        .from(nonconformityAssignees)
+        .innerJoin(nonconformities, eq(nonconformityAssignees.nonconformityId, nonconformities.id))
+        .where(eq(nonconformities.status, 'KAPALI'))
+        .groupBy(nonconformityAssignees.userId),
+    ]);
+    const openedByUser = new Map(openedCounts.map((r) => [r.userId, r.value]));
+    const closedByUser = new Map(closedCounts.map((r) => [r.userId, r.value]));
+
+    const rowsWithStats = rows.map((r) => ({
+      ...r,
+      openedCount: openedByUser.get(r.id) || 0,
+      closedCount: closedByUser.get(r.id) || 0,
+    }));
+
+    res.json({ users: rowsWithStats });
   })
 );
 
@@ -114,8 +134,31 @@ router.get(
       .innerJoin(permissions, eq(userPermissions.permissionId, permissions.id))
       .where(eq(userPermissions.userId, user.id));
 
+    const [[openedRow], [closedRow], [assignedOpenRow]] = await Promise.all([
+      db.select({ value: count() }).from(nonconformities).where(eq(nonconformities.openedById, user.id)),
+      db
+        .select({ value: count() })
+        .from(nonconformityAssignees)
+        .innerJoin(nonconformities, eq(nonconformityAssignees.nonconformityId, nonconformities.id))
+        .where(and(eq(nonconformityAssignees.userId, user.id), eq(nonconformities.status, 'KAPALI'))),
+      db
+        .select({ value: count() })
+        .from(nonconformityAssignees)
+        .innerJoin(nonconformities, eq(nonconformityAssignees.nonconformityId, nonconformities.id))
+        .where(and(eq(nonconformityAssignees.userId, user.id), inArray(nonconformities.status, ['ACIK', 'BEKLEMEDE', 'TERMIN_ASIMI']))),
+    ]);
+
     const { passwordHash, ...safeUser } = user;
-    res.json({ user: safeUser, assignments, permissions: grantedPermissions });
+    res.json({
+      user: safeUser,
+      assignments,
+      permissions: grantedPermissions,
+      stats: {
+        opened: openedRow?.value || 0,
+        closed: closedRow?.value || 0,
+        assignedOpen: assignedOpenRow?.value || 0,
+      },
+    });
   })
 );
 

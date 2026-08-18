@@ -6,6 +6,7 @@ import { NotificationBell } from './NotificationBell';
 const NAV_ITEMS = [
   { to: '/', label: 'Ana Sayfa', icon: '🏠', end: true },
   { to: '/uygunsuzluklar', label: 'Uygunsuzluklar', icon: '⚠️' },
+  { to: '/raporlar', label: 'Raporlar', icon: '📊', permission: 'rapor_goruntuleme' },
   { to: '/admin/projeler', label: 'Projeler', icon: '🏗️', permission: 'proje_yonetme' },
   { to: '/admin/firmalar', label: 'Firmalar', icon: '🏢', permission: 'firma_yonetme' },
   { to: '/admin/kullanicilar', label: 'Kullanıcılar', icon: '👤', permission: 'kullanici_yonetme' },

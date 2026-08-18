@@ -1,6 +1,6 @@
 const express = require('express');
 const { z } = require('zod');
-const { eq, and, or, desc, gte, lte, ilike, isNull, inArray } = require('drizzle-orm');
+const { eq, and, or, desc, gte, lte, ilike, isNull, inArray, count } = require('drizzle-orm');
 const { db } = require('../db/client');
 const {
   nonconformities,
@@ -144,6 +144,91 @@ router.get(
       .where(and(eq(userProjects.projectId, projectId), eq(userProjects.isActive, true), eq(users.isActive, true)));
 
     res.json({ users: rows });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Rapor: günlük/haftalık/aylık özet istatistikler
+// ---------------------------------------------------------------------------
+function rangeStartDate(range) {
+  const now = new Date();
+  if (range === 'week') return new Date(now.getTime() - 7 * 86400000);
+  if (range === 'month') return new Date(now.getTime() - 30 * 86400000);
+  // 'today' (varsayılan): yerel günün başlangıcı
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  return start;
+}
+
+router.get(
+  '/report',
+  requirePermission('rapor_goruntuleme'),
+  asyncHandler(async (req, res) => {
+    const projectId = resolveProjectId(req, req.query.projectId);
+    const range = ['today', 'week', 'month'].includes(req.query.range) ? req.query.range : 'today';
+    const from = rangeStartDate(range);
+
+    const myAssignedSubqueryRows = await db
+      .select({ nonconformityId: nonconformityAssignees.nonconformityId })
+      .from(nonconformityAssignees)
+      .where(eq(nonconformityAssignees.userId, req.user.sub));
+    const myAssignedIds = myAssignedSubqueryRows.map((r) => r.nonconformityId);
+
+    const [[totalOpenedRow], [myOpenedRow]] = await Promise.all([
+      db
+        .select({ value: count() })
+        .from(nonconformities)
+        .where(and(eq(nonconformities.projectId, projectId), gte(nonconformities.createdAt, from))),
+      db
+        .select({ value: count() })
+        .from(nonconformities)
+        .where(
+          and(
+            eq(nonconformities.projectId, projectId),
+            eq(nonconformities.openedById, req.user.sub),
+            gte(nonconformities.createdAt, from)
+          )
+        ),
+    ]);
+
+    let myAssignedCount = 0;
+    let myClosedCount = 0;
+    if (myAssignedIds.length > 0) {
+      const [[assignedRow], [closedRow]] = await Promise.all([
+        db
+          .select({ value: count() })
+          .from(nonconformities)
+          .where(
+            and(
+              eq(nonconformities.projectId, projectId),
+              inArray(nonconformities.id, myAssignedIds),
+              gte(nonconformities.createdAt, from)
+            )
+          ),
+        db
+          .select({ value: count() })
+          .from(nonconformities)
+          .where(
+            and(
+              eq(nonconformities.projectId, projectId),
+              inArray(nonconformities.id, myAssignedIds),
+              eq(nonconformities.status, 'KAPALI'),
+              gte(nonconformities.closedAt, from)
+            )
+          ),
+      ]);
+      myAssignedCount = assignedRow?.value || 0;
+      myClosedCount = closedRow?.value || 0;
+    }
+
+    res.json({
+      range,
+      from: from.toISOString(),
+      totalOpened: totalOpenedRow?.value || 0,
+      myOpened: myOpenedRow?.value || 0,
+      myAssigned: myAssignedCount,
+      myClosed: myClosedCount,
+    });
   })
 );
 

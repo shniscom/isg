@@ -94,6 +94,12 @@ export function UsersPage() {
                   {u.mustChangePassword && <Badge variant="warning">Şifre değişikliği bekliyor</Badge>}
                 </div>
                 <div className="text-sm text-slate-500">@{u.username}</div>
+                {!u.isSystemAdmin && (
+                  <div className="mt-1 flex gap-3 text-xs text-slate-500">
+                    <span>📂 {u.openedCount} açtı</span>
+                    <span>✅ {u.closedCount} kapattı</span>
+                  </div>
+                )}
               </div>
               <span className="text-slate-400">›</span>
             </Card>
