@@ -5,6 +5,7 @@ import { Layout } from './components/Layout';
 import { FullScreenLoader } from './components/ui';
 
 import { LoginPage } from './pages/LoginPage';
+import { InvitePage } from './pages/InvitePage';
 import { SelectContextPage } from './pages/SelectContextPage';
 import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -49,6 +50,7 @@ function AppRoutes() {
           </PublicOnlyRoute>
         }
       />
+      <Route path="/davet/:token" element={<InvitePage />} />
       <Route
         path="/proje-secimi"
         element={

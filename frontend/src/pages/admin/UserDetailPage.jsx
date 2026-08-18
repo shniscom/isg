@@ -15,6 +15,9 @@ export function UserDetailPage() {
   const [allPermissions, setAllPermissions] = useState([]);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [invite, setInvite] = useState(null); // { url, whatsappUrl, expiresAt }
+  const [inviteSubmitting, setInviteSubmitting] = useState(false);
+  const [inviteCopied, setInviteCopied] = useState(false);
 
   const [assignProjectId, setAssignProjectId] = useState('');
   const [assignRoleId, setAssignRoleId] = useState('');
@@ -164,6 +167,38 @@ export function UserDetailPage() {
     await load();
   }
 
+  async function handleCreateInvite() {
+    setInviteSubmitting(true);
+    setInviteCopied(false);
+    try {
+      const { data } = await apiClient.post(`/admin/users/${id}/invite-link`);
+      const url = `${window.location.origin}/davet/${data.token}`;
+      const message =
+        `Merhaba ${data.fullName}, İSG Takip Sistemi hesabınız hazır.\n` +
+        `Kullanıcı adınız: ${data.username}\n` +
+        `Şifrenizi belirlemek için bu bağlantıya tıklayın: ${url}`;
+      const whatsappUrl = data.whatsappPhone
+        ? `https://wa.me/${data.whatsappPhone}?text=${encodeURIComponent(message)}`
+        : `https://wa.me/?text=${encodeURIComponent(message)}`;
+      setInvite({ url, whatsappUrl, expiresAt: data.expiresAt });
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setInviteSubmitting(false);
+    }
+  }
+
+  async function handleCopyInviteLink() {
+    if (!invite) return;
+    try {
+      await navigator.clipboard.writeText(invite.url);
+      setInviteCopied(true);
+      setTimeout(() => setInviteCopied(false), 2000);
+    } catch {
+      // Panoya erişim izni yoksa sessizce yok say; kullanıcı linki elle seçip kopyalayabilir.
+    }
+  }
+
   if (error) return <Alert>{error}</Alert>;
   if (!user) return <p className="text-sm text-slate-500">Yükleniyor...</p>;
 
@@ -203,12 +238,51 @@ export function UserDetailPage() {
         </Card>
       )}
 
-      <Card>
+      <Card className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="font-semibold text-slate-800">Şifre</h2>
           <Button variant="secondary" onClick={handleResetPassword}>
             Geçici Şifre Oluştur
           </Button>
+        </div>
+
+        <div className="border-t border-slate-100 pt-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-800">Davet Bağlantısı</h3>
+              <p className="text-xs text-slate-500">
+                Kullanıcı bu bağlantıya tıklayıp kendi şifresini belirleyebilir; şifreyi telefonla iletmenize
+                gerek kalmaz. Bağlantı 7 gün geçerlidir ve tek kullanımlıktır.
+              </p>
+            </div>
+            <Button variant="secondary" onClick={handleCreateInvite} disabled={inviteSubmitting}>
+              {inviteSubmitting ? 'Oluşturuluyor...' : 'Bağlantı Oluştur'}
+            </Button>
+          </div>
+
+          {invite && (
+            <div className="mt-3 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-center gap-2">
+                <input
+                  readOnly
+                  value={invite.url}
+                  onFocus={(e) => e.target.select()}
+                  className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
+                />
+                <Button variant="ghost" onClick={handleCopyInviteLink}>
+                  {inviteCopied ? 'Kopyalandı ✓' : 'Kopyala'}
+                </Button>
+              </div>
+              <a
+                href={invite.whatsappUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-700"
+              >
+                📱 WhatsApp'ta Gönder
+              </a>
+            </div>
+          )}
         </div>
       </Card>
 

@@ -96,10 +96,10 @@ export function DashboardPage() {
             )}
           </Card>
 
-          <div className="flex gap-2">
+          <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0 sm:flex-wrap">
             <button
               onClick={() => setStatusFilter('')}
-              className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+              className={`shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition ${
                 statusFilter === '' ? 'bg-brand-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
@@ -109,7 +109,7 @@ export function DashboardPage() {
               <button
                 key={s}
                 onClick={() => setStatusFilter(s)}
-                className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                className={`shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition ${
                   statusFilter === s ? 'bg-brand-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >

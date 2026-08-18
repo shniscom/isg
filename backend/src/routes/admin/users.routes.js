@@ -2,7 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const { z } = require('zod');
 const { db } = require('../../db/client');
-const { users, userProjects, userPermissions, projects, roles, permissions, companies, nonconformities, nonconformityAssignees } = require('../../db/schema');
+const { users, userProjects, userPermissions, projects, roles, permissions, companies, nonconformities, nonconformityAssignees, userInvites } = require('../../db/schema');
 const { eq, and, isNull, count, inArray } = require('drizzle-orm');
 const { asyncHandler } = require('../../utils/asyncHandler');
 const { ApiError } = require('../../utils/apiError');
@@ -16,6 +16,23 @@ router.use(requirePermission('kullanici_yonetme'));
 function generateTempPassword() {
   // Okunması kolay, yeterince güçlü geçici şifre üretir. Örn: "Isg-7F3kQ2z9"
   return `Isg-${crypto.randomBytes(6).toString('base64url')}`;
+}
+
+function hashInviteToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+const INVITE_TTL_MS = 7 * 24 * 3600 * 1000; // 7 gün
+
+/** wa.me linki için telefon numarasını Türkiye varsayımıyla normalize eder (rakam dışı her şeyi atar). */
+function normalizePhoneForWhatsapp(phone) {
+  if (!phone) return null;
+  const digits = phone.replace(/\D/g, '');
+  if (!digits) return null;
+  if (digits.startsWith('90')) return digits;
+  if (digits.startsWith('0')) return `90${digits.slice(1)}`;
+  if (digits.length === 10) return `90${digits}`;
+  return digits;
 }
 
 const createUserSchema = z.object({
@@ -197,6 +214,36 @@ router.post(
 
     await logAudit({ userId: req.user.sub, action: 'USER_PASSWORD_RESET', entityType: 'user', entityId: user.id, ipAddress: req.ip });
     res.json({ tempPassword });
+  })
+);
+
+/**
+ * Davet bağlantısı oluşturur: kullanıcı şifresini kendisi belirlesin diye tek kullanımlık,
+ * 7 gün geçerli bir link üretilir. Admin bu linki (ör. WhatsApp üzerinden) kullanıcıya iletir.
+ * Ham token yalnızca bu yanıtta döner; DB'de sadece hash'i saklanır.
+ */
+router.post(
+  '/:id/invite-link',
+  asyncHandler(async (req, res) => {
+    const [user] = await db.select().from(users).where(eq(users.id, req.params.id)).limit(1);
+    if (!user) throw ApiError.notFound('Kullanıcı bulunamadı.');
+    if (!user.isActive) throw ApiError.badRequest('Pasif kullanıcı için davet bağlantısı oluşturulamaz.');
+
+    const token = crypto.randomBytes(24).toString('base64url');
+    const tokenHash = hashInviteToken(token);
+    const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
+
+    await db.insert(userInvites).values({ userId: user.id, tokenHash, expiresAt });
+
+    await logAudit({ userId: req.user.sub, action: 'USER_INVITE_LINK_CREATED', entityType: 'user', entityId: user.id, ipAddress: req.ip });
+
+    res.json({
+      token,
+      expiresAt,
+      username: user.username,
+      fullName: user.fullName,
+      whatsappPhone: normalizePhoneForWhatsapp(user.phone),
+    });
   })
 );
 

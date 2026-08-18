@@ -354,6 +354,23 @@ const systemSettings = pgTable('system_settings', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * Davet bağlantıları: admin bir kullanıcı için tek kullanımlık, süreli bir link üretir
+ * (ör. WhatsApp ile gönderilir). Kullanıcı linke tıklayıp kendi şifresini belirler.
+ * Ham token asla DB'ye yazılmaz, yalnızca sha256 hash'i saklanır.
+ */
+const userInvites = pgTable('user_invites', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tokenHash: text('token_hash').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('user_invites_token_hash_idx').on(table.tokenHash),
+  index('user_invites_user_idx').on(table.userId),
+]);
+
 // İlişkiler (relational query API için)
 const usersRelations = relations(users, ({ many }) => ({
   companyUsers: many(companyUsers),
@@ -364,6 +381,7 @@ const usersRelations = relations(users, ({ many }) => ({
   nonconformityAssignments: many(nonconformityAssignees),
   notifications: many(notifications),
   pushSubscriptions: many(pushSubscriptions),
+  invites: many(userInvites),
 }));
 
 const projectsRelations = relations(projects, ({ many }) => ({
@@ -481,6 +499,10 @@ const pushSubscriptionsRelations = relations(pushSubscriptions, ({ one }) => ({
   user: one(users, { fields: [pushSubscriptions.userId], references: [users.id] }),
 }));
 
+const userInvitesRelations = relations(userInvites, ({ one }) => ({
+  user: one(users, { fields: [userInvites.userId], references: [users.id] }),
+}));
+
 module.exports = {
   companyTypeEnum,
   projectStatusEnum,
@@ -511,6 +533,7 @@ module.exports = {
   penalties,
   pushSubscriptions,
   systemSettings,
+  userInvites,
   usersRelations,
   projectsRelations,
   projectBlocksRelations,

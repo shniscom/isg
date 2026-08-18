@@ -1,8 +1,9 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
+const crypto = require('crypto');
 const { z } = require('zod');
 const { db } = require('../db/client');
-const { users, userProjects, projects, roles } = require('../db/schema');
+const { users, userProjects, projects, roles, userInvites } = require('../db/schema');
 const { eq, and } = require('drizzle-orm');
 const { comparePassword, hashPassword, validatePasswordStrength } = require('../utils/password');
 const { signContextToken, signAccessToken } = require('../utils/jwt');
@@ -22,6 +23,26 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: { message: 'Çok fazla giriş denemesi yapıldı. Lütfen daha sonra tekrar deneyin.' } },
 });
+
+// Davet bağlantısı uçları için ayrı, biraz daha gevşek bir sınır (link tıklama + form denemesi).
+const inviteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: { message: 'Çok fazla deneme yapıldı. Lütfen daha sonra tekrar deneyin.' } },
+});
+
+function hashInviteToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+async function loadValidInvite(token) {
+  const tokenHash = hashInviteToken(token);
+  const [invite] = await db.select().from(userInvites).where(eq(userInvites.tokenHash, tokenHash)).limit(1);
+  if (!invite || invite.usedAt || invite.expiresAt < new Date()) return null;
+  return invite;
+}
 
 const loginSchema = z.object({
   username: z.string().min(1, 'Kullanıcı adı zorunludur.'),
@@ -214,6 +235,52 @@ router.post(
     await logAudit({ userId: user.id, action: 'PASSWORD_CHANGED', ipAddress: req.ip });
 
     res.json({ success: true });
+  })
+);
+
+// Davet bağlantısı geçerliyse kullanıcı adı/tam ad gösterilir (şifre belirleme ekranı için).
+router.get(
+  '/invite/:token',
+  inviteLimiter,
+  asyncHandler(async (req, res) => {
+    const invite = await loadValidInvite(req.params.token);
+    if (!invite) throw ApiError.badRequest('Bu davet bağlantısının süresi dolmuş veya daha önce kullanılmış.');
+
+    const [user] = await db.select().from(users).where(eq(users.id, invite.userId)).limit(1);
+    if (!user || !user.isActive) throw ApiError.badRequest('Bu davet bağlantısı artık geçerli değil.');
+
+    res.json({ fullName: user.fullName, username: user.username });
+  })
+);
+
+const inviteSetPasswordSchema = z.object({
+  password: z.string().min(1, 'Şifre zorunludur.'),
+});
+
+// Kullanıcı davet linki üzerinden kendi şifresini belirler; link tek kullanımlıktır.
+router.post(
+  '/invite/:token',
+  inviteLimiter,
+  asyncHandler(async (req, res) => {
+    const parsed = inviteSetPasswordSchema.safeParse(req.body);
+    if (!parsed.success) throw ApiError.badRequest('Geçersiz istek.', parsed.error.flatten());
+
+    const invite = await loadValidInvite(req.params.token);
+    if (!invite) throw ApiError.badRequest('Bu davet bağlantısının süresi dolmuş veya daha önce kullanılmış.');
+
+    const [user] = await db.select().from(users).where(eq(users.id, invite.userId)).limit(1);
+    if (!user || !user.isActive) throw ApiError.badRequest('Bu davet bağlantısı artık geçerli değil.');
+
+    const strengthError = validatePasswordStrength(parsed.data.password);
+    if (strengthError) throw ApiError.badRequest(strengthError);
+
+    const passwordHash = await hashPassword(parsed.data.password);
+    await db.update(users).set({ passwordHash, mustChangePassword: false }).where(eq(users.id, user.id));
+    await db.update(userInvites).set({ usedAt: new Date() }).where(eq(userInvites.id, invite.id));
+
+    await logAudit({ userId: user.id, action: 'INVITE_PASSWORD_SET', entityType: 'user', entityId: user.id, ipAddress: req.ip });
+
+    res.json({ success: true, username: user.username });
   })
 );
 
