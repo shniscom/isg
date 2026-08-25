@@ -11,6 +11,39 @@ const SORT_OPTIONS = [
   { value: 'startDate', label: 'Giriş Tarihine Göre (Yeni-Eski)' },
 ];
 
+// Excel içe aktarma kolon sırası: ilk satır başlık kabul edilir, veriler 2. satırdan başlar.
+const EXCEL_COLUMNS = [
+  { col: 'A', label: 'Sıra No', required: false, note: 'Bilgi amaçlı, sistem tarafından kullanılmaz.' },
+  { col: 'B', label: 'Ad Soyad', required: true, note: 'Zorunlu.' },
+  { col: 'C', label: 'TC Kimlik No', required: false, note: '11 haneli, boş bırakılabilir.' },
+  { col: 'D', label: 'Görevi', required: false, note: 'Örn: Elektrikçi, Boyacı.' },
+  { col: 'E', label: 'İSG Eğitimi', required: false, note: '"Var" yazılırsa tamamlanmış sayılır, aksi halde boş/"Yok" bırakılabilir.' },
+  { col: 'F', label: 'Tetkik', required: false, note: 'Serbest metin not alanı.' },
+  { col: 'G', label: 'Giriş Tarihi', required: true, note: 'Zorunlu. GG.AA.YYYY veya tarih hücresi formatında.' },
+  { col: 'H', label: 'Çıkış Tarihi', required: false, note: 'Hâlâ çalışıyorsa boş bırakılmalı.' },
+];
+
+const EXCEL_TEMPLATE_HEADER = [
+  'Sıra No',
+  'Ad Soyad',
+  'TC Kimlik No',
+  'Görevi',
+  'İSG Eğitimi',
+  'Tetkik',
+  'Giriş Tarihi',
+  'Çıkış Tarihi',
+];
+
+const EXCEL_TEMPLATE_EXAMPLE_ROW = [1, 'Ali Veli', '12345678901', 'Elektrikçi', 'Var', 'Uygun', '01.01.2026', ''];
+
+function downloadEmployeeExcelTemplate() {
+  const sheet = XLSX.utils.aoa_to_sheet([EXCEL_TEMPLATE_HEADER, EXCEL_TEMPLATE_EXAMPLE_ROW]);
+  sheet['!cols'] = [{ wch: 8 }, { wch: 22 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 20 }, { wch: 14 }, { wch: 14 }];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Çalışanlar');
+  XLSX.writeFile(workbook, 'calisan_listesi_sablonu.xlsx');
+}
+
 function cellText(value) {
   if (value === undefined || value === null) return '';
   return String(value).trim();
@@ -77,6 +110,7 @@ export function EmployeesPage() {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
   const [importError, setImportError] = useState(null);
+  const [showFormatGuide, setShowFormatGuide] = useState(false);
 
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [quickAdd, setQuickAdd] = useState({ fullName: '', nationalId: '', startDate: '' });
@@ -277,6 +311,59 @@ export function EmployeesPage() {
             + Çalışan Ekle
           </Button>
         </div>
+      )}
+
+      {user?.isSystemAdmin && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+          <button
+            type="button"
+            onClick={() => setShowFormatGuide((v) => !v)}
+            className="font-medium text-brand-700 hover:underline"
+          >
+            {showFormatGuide ? 'Excel formatını gizle ▲' : 'ℹ️ Excel formatı nasıl olmalı? ▼'}
+          </button>
+          <button type="button" onClick={downloadEmployeeExcelTemplate} className="font-medium text-brand-700 hover:underline">
+            📄 Boş şablon indir
+          </button>
+        </div>
+      )}
+
+      {user?.isSystemAdmin && showFormatGuide && (
+        <Card className="space-y-2 text-sm">
+          <p className="text-slate-600">
+            İlk satır <span className="font-medium">başlık</span> kabul edilir ve okunmaz; veriler{' '}
+            <span className="font-medium">2. satırdan</span> itibaren, sütunlar aşağıdaki sırada olmalıdır:
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[420px] border-collapse text-left text-xs">
+              <thead>
+                <tr className="border-b border-slate-200 text-slate-500">
+                  <th className="py-1.5 pr-3 font-medium">Sütun</th>
+                  <th className="py-1.5 pr-3 font-medium">Alan</th>
+                  <th className="py-1.5 pr-3 font-medium">Zorunlu</th>
+                  <th className="py-1.5 font-medium">Açıklama</th>
+                </tr>
+              </thead>
+              <tbody>
+                {EXCEL_COLUMNS.map((c) => (
+                  <tr key={c.col} className="border-b border-slate-100 align-top">
+                    <td className="py-1.5 pr-3 font-mono font-semibold text-slate-700">{c.col}</td>
+                    <td className="py-1.5 pr-3 text-slate-800">{c.label}</td>
+                    <td className="py-1.5 pr-3">
+                      {c.required ? <Badge variant="danger">Zorunlu</Badge> : <Badge>Opsiyonel</Badge>}
+                    </td>
+                    <td className="py-1.5 text-slate-500">{c.note}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-slate-500">
+            Not: Ad Soyad veya Giriş Tarihi boş olan satırlar atlanır. Daha önce yüklenmiş, aktif bir çalışan yeni
+            listede yer almazsa otomatik olarak (tarihsiz) arşive alınır. Kolayca başlamak için "Boş şablon indir"
+            butonuyla örnek bir Excel dosyası indirip üzerine yazabilirsiniz.
+          </p>
+        </Card>
       )}
 
       {importError && <Alert>{importError}</Alert>}
