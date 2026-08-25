@@ -6,13 +6,14 @@ export function LoginPage() {
   const { login, error, clearError } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(e) {
     e.preventDefault();
     clearError();
     setSubmitting(true);
-    await login(username, password);
+    await login(username, password, rememberMe);
     setSubmitting(false);
   }
 
@@ -43,6 +44,15 @@ export function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
             />
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300 text-brand-700 focus:ring-brand-500"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+              />
+              Beni hatırla
+            </label>
             <Button type="submit" className="w-full" disabled={submitting}>
               {submitting ? 'Giriş yapılıyor...' : 'Giriş Yap'}
             </Button>

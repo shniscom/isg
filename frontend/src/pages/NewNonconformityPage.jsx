@@ -81,9 +81,11 @@ export function NewNonconformityPage() {
     apiClient
       .get('/nonconformities/assignable-users', { params })
       .then(({ data }) => {
-        setUsers(data.users);
+        // Kişi kendisine uygunsuzluk atayamaz; kendi kaydını listeden çıkar.
+        const filtered = data.users.filter((u) => u.userId !== user?.id);
+        setUsers(filtered);
         // Firma değişince artık listede olmayan seçimler otomatik kaldırılır.
-        const validIds = new Set(data.users.map((u) => u.userId));
+        const validIds = new Set(filtered.map((u) => u.userId));
         setAssignedUserIds((prev) => prev.filter((id) => validIds.has(id)));
       })
       .catch((err) => setError(getErrorMessage(err)));
@@ -342,7 +344,7 @@ export function NewNonconformityPage() {
                 : 'Önce sorumlu firmayı seçerseniz liste yalnızca o firmayla ilgili kişilere daralır.'}
             </p>
             {users && users.length === 0 && (
-              <p className="text-sm text-slate-400">Bu kapsamda atanabilir kullanıcı yok.</p>
+              <p className="text-sm text-slate-400">Bu kapsamda atanabilir kullanıcı yok (kendinize atama yapamazsınız).</p>
             )}
             <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-slate-300 p-2">
               {users?.map((u) => (

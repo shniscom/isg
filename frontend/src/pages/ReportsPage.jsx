@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import apiClient, { getErrorMessage } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { Card, Select, Alert, Button } from '../components/ui';
+import { Card, Select, Alert, Button, Input } from '../components/ui';
 
-const RANGE_LABELS = { today: 'Bugün', week: 'Bu Hafta (son 7 gün)', month: 'Bu Ay (son 30 gün)' };
+const RANGE_LABELS = { today: 'Bugün', week: 'Bu Hafta (son 7 gün)', month: 'Bu Ay (son 30 gün)', custom: 'Özel Aralık' };
 
 function downloadCsv(rows, fileName) {
   const csv = rows.map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -24,6 +24,10 @@ export function ReportsPage() {
 
   const [adminProjects, setAdminProjects] = useState(null);
   const [adminProjectId, setAdminProjectId] = useState('');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState(null);
 
   useEffect(() => {
     if (user?.isSystemAdmin) {
@@ -39,9 +43,17 @@ export function ReportsPage() {
 
   async function load() {
     if (user?.isSystemAdmin && !adminProjectId) return;
+    if (range === 'custom' && (!customFrom || !customTo)) {
+      setReport(null);
+      return;
+    }
     try {
       const params = { range };
       if (user?.isSystemAdmin) params.projectId = adminProjectId;
+      if (range === 'custom') {
+        params.from = new Date(customFrom).toISOString();
+        params.to = new Date(customTo).toISOString();
+      }
       const { data } = await apiClient.get('/nonconformities/report', { params });
       setReport(data);
     } catch (err) {
@@ -52,7 +64,45 @@ export function ReportsPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range, adminProjectId]);
+  }, [range, adminProjectId, customFrom, customTo]);
+
+  async function handleFullExport() {
+    if (!user?.isSystemAdmin || !adminProjectId) return;
+    const from = range === 'custom' && customFrom ? new Date(customFrom).toISOString() : report?.from;
+    const to = range === 'custom' && customTo ? new Date(customTo).toISOString() : new Date().toISOString();
+    if (!from) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      const { data } = await apiClient.get('/nonconformities/full-export', { params: { projectId: adminProjectId, from, to } });
+      if (data.nonconformities.length === 0) {
+        setExportError('Bu tarih aralığında kayıt bulunamadı.');
+        return;
+      }
+      const rows = [
+        ['Numara', 'Durum', 'Öncelik', 'Açıklama', 'Kategori', 'Blok/Bölge', 'Firma', 'Açan', 'Atananlar', 'Açılış Tarihi', 'Termin Tarihi', 'Kapanış Tarihi'],
+        ...data.nonconformities.map((n) => [
+          n.number,
+          n.status,
+          n.priority,
+          n.description,
+          n.categoryName || '',
+          n.blockName || '',
+          n.companyName || '',
+          n.openedByName || '',
+          n.assigneeNames || '',
+          n.createdAt,
+          n.dueDate,
+          n.closedAt || '',
+        ]),
+      ];
+      downloadCsv(rows, `uygunsuzluklar-${from.slice(0, 10)}_${to.slice(0, 10)}.csv`);
+    } catch (err) {
+      setExportError(getErrorMessage(err));
+    } finally {
+      setExporting(false);
+    }
+  }
 
   function handleExport() {
     if (!report) return;
@@ -92,12 +142,12 @@ export function ReportsPage() {
         </Select>
       )}
 
-      <div className="flex gap-2">
+      <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0 sm:flex-wrap">
         {Object.entries(RANGE_LABELS).map(([value, label]) => (
           <button
             key={value}
             onClick={() => setRange(value)}
-            className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+            className={`shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition ${
               range === value ? 'bg-brand-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
             }`}
           >
@@ -106,7 +156,35 @@ export function ReportsPage() {
         ))}
       </div>
 
-      {!report && !error && <p className="text-sm text-slate-500">Yükleniyor...</p>}
+      {range === 'custom' && (
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <div className="flex-1">
+            <Input label="Başlangıç" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
+          </div>
+          <div className="flex-1">
+            <Input label="Bitiş" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
+          </div>
+        </div>
+      )}
+
+      {user?.isSystemAdmin && adminProjectId && (
+        <div>
+          {exportError && <Alert>{exportError}</Alert>}
+          <Button variant="secondary" onClick={handleFullExport} disabled={exporting}>
+            {exporting ? 'Hazırlanıyor...' : '📄 Tüm Kayıtları CSV Olarak İndir'}
+          </Button>
+          <p className="mt-1 text-xs text-slate-500">
+            Seçili tarih aralığındaki (özel aralık seçmediyseniz bu dönemin başlangıcından bugüne kadar olan) tüm
+            uygunsuzluk kayıtlarını, tüm alanlarıyla birlikte indirir.
+          </p>
+        </div>
+      )}
+
+      {range === 'custom' && (!customFrom || !customTo) && !error && (
+        <p className="text-sm text-slate-500">Rapor görmek için başlangıç ve bitiş tarihi seçin.</p>
+      )}
+
+      {!report && !error && range !== 'custom' && <p className="text-sm text-slate-500">Yükleniyor...</p>}
 
       {report && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

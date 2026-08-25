@@ -6,20 +6,31 @@ const AuthContext = createContext(null);
 
 const STORAGE_KEY = 'isg_takip_session_v1';
 
+// "Beni Hatırla" işaretliyse localStorage'da (tarayıcı/uygulama tamamen kapansa bile kalıcı),
+// işaretli değilse sessionStorage'da (sekme/uygulama kapanınca silinir) saklanır.
 function loadStoredSession() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
+    const fromLocal = localStorage.getItem(STORAGE_KEY);
+    if (fromLocal) return JSON.parse(fromLocal);
+    const fromSession = sessionStorage.getItem(STORAGE_KEY);
+    return fromSession ? JSON.parse(fromSession) : null;
   } catch {
     return null;
   }
 }
 
-function persistSession(session) {
-  if (session) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
-  } else {
+function persistSession(session, rememberMe) {
+  try {
     localStorage.removeItem(STORAGE_KEY);
+    sessionStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // depolamaya erişilemiyorsa (gizli sekme vb.) sessizce yok say; oturum yalnızca bellekte kalır.
+  }
+  if (!session) return;
+  try {
+    (rememberMe ? localStorage : sessionStorage).setItem(STORAGE_KEY, JSON.stringify(session));
+  } catch {
+    // yok say
   }
 }
 
@@ -31,6 +42,7 @@ export function AuthProvider({ children }) {
   const [accessToken, setAccessToken] = useState(null);
   const [context, setContext] = useState(null); // { projectId, roleId, permissions }
   const [error, setError] = useState(null);
+  const [rememberMePending, setRememberMePending] = useState(true); // login() ile select-context() arasında taşınır
 
   const reset = useCallback(() => {
     setAuthToken(null);
@@ -68,23 +80,24 @@ export function AuthProvider({ children }) {
       });
   }, [reset]);
 
-  const login = useCallback(async (username, password) => {
+  const login = useCallback(async (username, password, rememberMe = true) => {
     setError(null);
     try {
-      const { data } = await apiClient.post('/auth/login', { username, password });
+      const { data } = await apiClient.post('/auth/login', { username, password, rememberMe });
       setUser(data.user);
 
       if (data.isSystemAdmin) {
         setAuthToken(data.accessToken);
         setAccessToken(data.accessToken);
         setContext(null);
-        persistSession({ accessToken: data.accessToken });
+        persistSession({ accessToken: data.accessToken }, rememberMe);
         setStatus(data.mustChangePassword ? 'change-password' : 'authenticated');
         return { ok: true };
       }
 
       setContextToken(data.contextToken);
       setAssignments(data.assignments);
+      setRememberMePending(rememberMe);
       setStatus('select-context');
       return { ok: true };
     } catch (err) {
@@ -103,7 +116,7 @@ export function AuthProvider({ children }) {
         setAccessToken(data.accessToken);
         setUser(data.user);
         setContext(data.context);
-        persistSession({ accessToken: data.accessToken });
+        persistSession({ accessToken: data.accessToken }, rememberMePending);
         setStatus(data.mustChangePassword ? 'change-password' : 'authenticated');
         return { ok: true };
       } catch (err) {
@@ -112,7 +125,7 @@ export function AuthProvider({ children }) {
         return { ok: false, message };
       }
     },
-    [contextToken]
+    [contextToken, rememberMePending]
   );
 
   const changePassword = useCallback(async (currentPassword, newPassword) => {

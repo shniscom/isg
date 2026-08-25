@@ -2,7 +2,7 @@ const express = require('express');
 const { z } = require('zod');
 const { eq, and, desc, inArray } = require('drizzle-orm');
 const { db } = require('../db/client');
-const { penalties, nonconformities, employees, users, companies } = require('../db/schema');
+const { penalties, nonconformities, employees, users, companies, nonconformityAssignees } = require('../db/schema');
 const { requireAuth } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permission');
 const { asyncHandler } = require('../utils/asyncHandler');
@@ -13,6 +13,54 @@ const { loadAssigneeIdsFor } = require('../services/nonconformity.service');
 
 const router = express.Router();
 router.use(requireAuth);
+
+/**
+ * "Cezalarım" - herhangi bir özel yetki gerektirmez. Kullanıcının ya talep ettiği ya da
+ * (sorumlu olarak atandığı uygunsuzluğa bağlı olduğu için) hakkında olabileceği cezaları
+ * döner. Dashboard'daki "Cezalarım" kartı için kullanılır.
+ */
+router.get(
+  '/mine',
+  asyncHandler(async (req, res) => {
+    const assignedNcIds = await db
+      .select({ nonconformityId: nonconformityAssignees.nonconformityId })
+      .from(nonconformityAssignees)
+      .where(eq(nonconformityAssignees.userId, req.user.sub));
+    const assignedIds = new Set(assignedNcIds.map((r) => r.nonconformityId));
+
+    const rows = await db
+      .select({
+        id: penalties.id,
+        status: penalties.status,
+        sanctionType: penalties.sanctionType,
+        suggestedAmount: penalties.suggestedAmount,
+        requestedAt: penalties.requestedAt,
+        nonconformityId: nonconformities.id,
+        nonconformityNumber: nonconformities.number,
+        openedById: nonconformities.openedById,
+        requestedById: penalties.requestedById,
+      })
+      .from(penalties)
+      .innerJoin(nonconformities, eq(penalties.nonconformityId, nonconformities.id))
+      .orderBy(desc(penalties.requestedAt));
+
+    const mine = rows.filter(
+      (r) => r.requestedById === req.user.sub || assignedIds.has(r.nonconformityId)
+    );
+
+    const userIds = [...new Set(mine.flatMap((r) => [r.openedById, r.requestedById]))];
+    const userRows = userIds.length ? await db.select({ id: users.id, fullName: users.fullName }).from(users).where(inArray(users.id, userIds)) : [];
+    const userNameById = new Map(userRows.map((u) => [u.id, u.fullName]));
+
+    const result = mine.map((r) => ({
+      ...r,
+      openedByName: userNameById.get(r.openedById) || null,
+      requestedByName: userNameById.get(r.requestedById) || null,
+    }));
+
+    res.json({ penalties: result });
+  })
+);
 
 /**
  * Ceza listesi. Admin ve 'cezai_islem' yetkisi olanlar görebilir. ?status= ile filtrelenebilir
@@ -89,6 +137,11 @@ router.post(
     const { penalty, nonconformity: nc } = row;
     if (!req.user.isSystemAdmin && nc.projectId !== req.user.projectId) throw ApiError.forbidden();
     if (penalty.status !== 'BEKLEMEDE') throw ApiError.conflict('Bu talep zaten karara bağlanmış.');
+    // Ceza talebini oluşturan kişi kendi talebini onaylayamaz - cezai_islem yetkisi olsa dahi.
+    // Bu durumda yalnızca sistem admini onaylayabilir (çıkar çatışmasını önlemek için).
+    if (!req.user.isSystemAdmin && penalty.requestedById === req.user.sub) {
+      throw ApiError.forbidden('Kendi talep ettiğiniz cezayı onaylayamazsınız. Bu talebi yalnızca admin veya başka bir yetkili karara bağlayabilir.');
+    }
 
     const schema = z.object({ decisionNote: z.string().optional().nullable() });
     const parsed = schema.safeParse(req.body);
@@ -121,6 +174,9 @@ router.post(
     const { penalty, nonconformity: nc } = row;
     if (!req.user.isSystemAdmin && nc.projectId !== req.user.projectId) throw ApiError.forbidden();
     if (penalty.status !== 'BEKLEMEDE') throw ApiError.conflict('Bu talep zaten karara bağlanmış.');
+    if (!req.user.isSystemAdmin && penalty.requestedById === req.user.sub) {
+      throw ApiError.forbidden('Kendi talep ettiğiniz cezayı reddedemezsiniz. Bu talebi yalnızca admin veya başka bir yetkili karara bağlayabilir.');
+    }
 
     const schema = z.object({ decisionNote: z.string().min(3, 'Red gerekçesi zorunludur.') });
     const parsed = schema.safeParse(req.body);

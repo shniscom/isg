@@ -138,7 +138,11 @@ export function PenaltiesPage() {
             </p>
             {p.decisionNote && <p className="mt-1 text-xs text-slate-500">Not: {p.decisionNote}</p>}
 
-            {p.status === 'BEKLEMEDE' && (
+            {p.status === 'BEKLEMEDE' && p.requestedById === user?.id && !user?.isSystemAdmin ? (
+              <p className="mt-3 border-t border-slate-100 pt-3 text-xs text-amber-700">
+                Bu talebi siz oluşturdunuz; kendi talebinizi onaylayamaz/reddedemezsiniz. Başka bir yetkili veya admin karara bağlamalı.
+              </p>
+            ) : p.status === 'BEKLEMEDE' && (
               <div className="mt-3 border-t border-slate-100 pt-3">
                 {rejectingId !== p.id ? (
                   <div className="flex gap-3">

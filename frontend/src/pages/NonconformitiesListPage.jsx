@@ -19,7 +19,8 @@ export function NonconformitiesListPage() {
   const { user, hasPermission } = useAuth();
   const [items, setItems] = useState(null);
   const [error, setError] = useState(null);
-  const [status, setStatus] = useState('');
+  // Açık uygunsuzluklar en çok ihtiyaç duyulan görünüm olduğundan varsayılan filtre budur.
+  const [status, setStatus] = useState('ACIK');
 
   // Sistem admini herhangi bir projeye önceden bağlı olmadığından, liste görüntülemek
   // için burada bir proje seçmesi gerekir.
@@ -77,20 +78,12 @@ export function NonconformitiesListPage() {
         </Select>
       )}
 
-      <div className="flex flex-wrap gap-2">
-        <button
-          onClick={() => setStatus('')}
-          className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-            status === '' ? 'bg-brand-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-          }`}
-        >
-          Tümü
-        </button>
+      <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0 sm:flex-wrap">
         {STATUS_FILTERS.map((s) => (
           <button
             key={s}
             onClick={() => setStatus(s)}
-            className={`flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-medium transition ${
+            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition ${
               status === s ? 'bg-brand-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
             }`}
           >
@@ -98,6 +91,14 @@ export function NonconformitiesListPage() {
             {STATUS_LABELS[s]}
           </button>
         ))}
+        <button
+          onClick={() => setStatus('')}
+          className={`shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition ${
+            status === '' ? 'bg-brand-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+          }`}
+        >
+          Tümü
+        </button>
       </div>
 
       {error && <Alert>{error}</Alert>}

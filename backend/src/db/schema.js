@@ -45,6 +45,7 @@ const nonconformityPhotoTypeEnum = pgEnum('nonconformity_photo_type', [
 const correctionStatusEnum = pgEnum('correction_status', ['BEKLEMEDE', 'ONAYLANDI', 'REDDEDILDI']);
 const penaltySanctionEnum = pgEnum('penalty_sanction', ['PARA_CEZASI', 'UYARI', 'CALISMADAN_UZAKLASTIRMA', 'IS_AKDI_FESHI', 'DIGER']);
 const penaltyStatusEnum = pgEnum('penalty_status', ['BEKLEMEDE', 'ONAYLANDI', 'REDDEDILDI']);
+const extensionStatusEnum = pgEnum('extension_status', ['BEKLEMEDE', 'ONAYLANDI', 'REDDEDILDI']);
 
 const users = pgTable('users', {
   id: text('id').primaryKey().$defaultFn(genId),
@@ -196,6 +197,11 @@ const employees = pgTable('employees', {
   companyId: text('company_id').references(() => companies.id, { onDelete: 'set null' }),
   fullName: text('full_name').notNull(),
   nationalId: text('national_id'), // T.C. kimlik no, biliniyorsa
+  position: text('position'), // görevi
+  isgTrainingCompleted: boolean('isg_training_completed').notNull().default(false),
+  medicalExamNote: text('medical_exam_note'), // tetkik bilgisi (serbest metin, ör. tarih/sonuç)
+  startDate: timestamp('start_date', { withTimezone: true }), // işe giriş tarihi
+  endDate: timestamp('end_date', { withTimezone: true }), // işten çıkış tarihi (doluysa arşivde sayılır)
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -220,6 +226,7 @@ const nonconformities = pgTable('nonconformities', {
   dueDate: timestamp('due_date', { withTimezone: true }).notNull(), // termin tarihi
   closedAt: timestamp('closed_at', { withTimezone: true }),
   deadlineReminderSentAt: timestamp('deadline_reminder_sent_at', { withTimezone: true }), // termin %66'sı dolunca gönderilen uyarı
+  deadlineExpiredNotifiedAt: timestamp('deadline_expired_notified_at', { withTimezone: true }), // termin tarihi geçince açan+atananlara gönderilen bildirim
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -330,6 +337,30 @@ const penalties = pgTable('penalties', {
   index('penalties_nonconformity_idx').on(table.nonconformityId),
   index('penalties_employee_idx').on(table.employeeId),
   index('penalties_status_idx').on(table.status),
+]);
+
+/**
+ * Termin (ek süre) talebi: uygunsuzluğun termin tarihi dolduğunda/dolmak üzereyken, atanan
+ * kişi ceza almamak için ek süre talep edebilir. Talep, uygunsuzluğu açan kişiye (veya admine)
+ * onaya gider; onaylanırsa uygunsuzluğun termin tarihi güncellenir, reddedilirse açan kişi
+ * dilerse ayrıca cezai işlem talebinde bulunabilir (mevcut ceza talebi akışı üzerinden).
+ */
+const dueDateExtensions = pgTable('due_date_extensions', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  nonconformityId: text('nonconformity_id').notNull().references(() => nonconformities.id, { onDelete: 'cascade' }),
+  requestedById: text('requested_by_id').notNull().references(() => users.id),
+  requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+  currentDueDate: timestamp('current_due_date', { withTimezone: true }).notNull(), // talep anındaki termin (referans)
+  requestedNewDueDate: timestamp('requested_new_due_date', { withTimezone: true }).notNull(),
+  reason: text('reason').notNull(),
+  status: extensionStatusEnum('status').notNull().default('BEKLEMEDE'),
+  decidedById: text('decided_by_id').references(() => users.id),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  decisionNote: text('decision_note'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('due_date_extensions_nonconformity_idx').on(table.nonconformityId),
+  index('due_date_extensions_status_idx').on(table.status),
 ]);
 
 /**
@@ -458,6 +489,7 @@ const nonconformitiesRelations = relations(nonconformities, ({ one, many }) => (
   corrections: many(nonconformityCorrections),
   history: many(nonconformityStatusHistory),
   penalties: many(penalties),
+  dueDateExtensions: many(dueDateExtensions),
 }));
 
 const nonconformityAssigneesRelations = relations(nonconformityAssignees, ({ one }) => ({
@@ -495,6 +527,12 @@ const penaltiesRelations = relations(penalties, ({ one }) => ({
   decidedBy: one(users, { fields: [penalties.decidedById], references: [users.id] }),
 }));
 
+const dueDateExtensionsRelations = relations(dueDateExtensions, ({ one }) => ({
+  nonconformity: one(nonconformities, { fields: [dueDateExtensions.nonconformityId], references: [nonconformities.id] }),
+  requestedBy: one(users, { fields: [dueDateExtensions.requestedById], references: [users.id] }),
+  decidedBy: one(users, { fields: [dueDateExtensions.decidedById], references: [users.id] }),
+}));
+
 const pushSubscriptionsRelations = relations(pushSubscriptions, ({ one }) => ({
   user: one(users, { fields: [pushSubscriptions.userId], references: [users.id] }),
 }));
@@ -512,6 +550,7 @@ module.exports = {
   correctionStatusEnum,
   penaltySanctionEnum,
   penaltyStatusEnum,
+  extensionStatusEnum,
   users,
   projects,
   projectBlocks,
@@ -531,6 +570,7 @@ module.exports = {
   nonconformityPhotos,
   nonconformityStatusHistory,
   penalties,
+  dueDateExtensions,
   pushSubscriptions,
   systemSettings,
   userInvites,
@@ -553,5 +593,6 @@ module.exports = {
   nonconformityStatusHistoryRelations,
   employeesRelations,
   penaltiesRelations,
+  dueDateExtensionsRelations,
   pushSubscriptionsRelations,
 };

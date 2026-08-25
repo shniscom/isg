@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import apiClient, { getErrorMessage } from '../../api/client';
 import { Card, Button, Input, Alert, Badge } from '../../components/ui';
+import { useAuth } from '../../context/AuthContext';
 
 export function ProjectDetailPage() {
   const { id } = useParams();
@@ -10,6 +11,12 @@ export function ProjectDetailPage() {
   const [error, setError] = useState(null);
   const [newBlockName, setNewBlockName] = useState('');
   const [blockError, setBlockError] = useState(null);
+  const { user } = useAuth();
+  const [showReset, setShowReset] = useState(false);
+  const [resetCode, setResetCode] = useState('');
+  const [resetError, setResetError] = useState(null);
+  const [resetNotice, setResetNotice] = useState(null);
+  const [resetSubmitting, setResetSubmitting] = useState(false);
 
   async function load() {
     try {
@@ -42,6 +49,22 @@ export function ProjectDetailPage() {
   async function handleDeleteBlock(blockId) {
     await apiClient.delete(`/admin/projects/${id}/blocks/${blockId}`);
     await load();
+  }
+
+  async function handleResetProject(e) {
+    e.preventDefault();
+    setResetError(null);
+    setResetSubmitting(true);
+    try {
+      const { data } = await apiClient.post(`/admin/projects/${id}/reset-nonconformities`, { confirmCode: resetCode });
+      setResetNotice(`${data.deletedCount} uygunsuzluk kaydı kalıcı olarak silindi.`);
+      setResetCode('');
+      setShowReset(false);
+    } catch (err) {
+      setResetError(getErrorMessage(err));
+    } finally {
+      setResetSubmitting(false);
+    }
   }
 
   if (error) return <Alert>{error}</Alert>;
@@ -90,6 +113,43 @@ export function ProjectDetailPage() {
           ))}
         </div>
       </Card>
+
+      {user?.isSystemAdmin && (
+        <Card className="border-red-200 bg-red-50/40">
+          <h2 className="mb-1 font-semibold text-red-800">Tehlikeli Bölge</h2>
+          <p className="mb-3 text-sm text-red-700">
+            Bu projeye ait TÜM uygunsuzluk kayıtlarını (fotoğraf, düzeltme, tarihçe ve ceza kayıtları dahil)
+            kalıcı olarak siler. Proje/firma/kullanıcı tanımlarına dokunmaz. Yalnızca test/deneme sürecinde
+            kullanılması önerilir; geri alınamaz.
+          </p>
+
+          {resetNotice && <Alert variant="success">{resetNotice}</Alert>}
+          {resetError && <Alert>{resetError}</Alert>}
+
+          {!showReset ? (
+            <Button variant="danger" onClick={() => setShowReset(true)}>
+              Projeyi Sıfırla
+            </Button>
+          ) : (
+            <form onSubmit={handleResetProject} className="space-y-3">
+              <Input
+                label={`Onaylamak için proje kodunu yazın: "${project.code}"`}
+                value={resetCode}
+                onChange={(e) => setResetCode(e.target.value)}
+                required
+              />
+              <div className="flex gap-3">
+                <Button type="submit" variant="danger" disabled={resetSubmitting || resetCode !== project.code}>
+                  {resetSubmitting ? 'Siliniyor...' : 'Evet, Tüm Uygunsuzlukları Sil'}
+                </Button>
+                <Button type="button" variant="secondary" onClick={() => { setShowReset(false); setResetCode(''); }}>
+                  Vazgeç
+                </Button>
+              </div>
+            </form>
+          )}
+        </Card>
+      )}
     </div>
   );
 }

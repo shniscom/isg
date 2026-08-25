@@ -1,11 +1,11 @@
 const express = require('express');
 const { z } = require('zod');
 const { db } = require('../../db/client');
-const { projects, projectBlocks } = require('../../db/schema');
-const { eq, and } = require('drizzle-orm');
+const { projects, projectBlocks, nonconformities } = require('../../db/schema');
+const { eq, and, count } = require('drizzle-orm');
 const { asyncHandler } = require('../../utils/asyncHandler');
 const { ApiError } = require('../../utils/apiError');
-const { requirePermission } = require('../../middleware/permission');
+const { requirePermission, requireSystemAdmin } = require('../../middleware/permission');
 const { logAudit } = require('../../utils/audit');
 
 const router = express.Router();
@@ -159,6 +159,44 @@ router.delete(
 
     await logAudit({ userId: req.user.sub, action: 'PROJECT_BLOCK_DELETE', entityType: 'project_block', entityId: deleted.id, ipAddress: req.ip });
     res.json({ success: true });
+  })
+);
+
+/**
+ * Projeyi test/deneme sürecinde sıfırlar: bu projeye ait TÜM uygunsuzluklar (ve bağlı
+ * fotoğraf/düzeltme/tarihçe/ceza kayıtları, cascade ile) kalıcı olarak silinir. Proje, firma,
+ * kullanıcı ve rol tanımlarına dokunulmaz. Yanlışlıkla tetiklenmesini önlemek için istek
+ * gövdesinde projenin kodunun aynen tekrar yazılması zorunludur.
+ * Yalnızca sistem admini kullanabilir (proje_yonetme yetkisi yeterli değildir).
+ */
+router.post(
+  '/:id/reset-nonconformities',
+  requireSystemAdmin,
+  asyncHandler(async (req, res) => {
+    const [project] = await db.select().from(projects).where(eq(projects.id, req.params.id)).limit(1);
+    if (!project) throw ApiError.notFound('Proje bulunamadı.');
+
+    const schema = z.object({ confirmCode: z.string().min(1, 'Onay için proje kodunu yazmalısınız.') });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) throw ApiError.badRequest('Onay için proje kodunu yazmalısınız.');
+    if (parsed.data.confirmCode !== project.code) {
+      throw ApiError.badRequest('Girilen proje kodu eşleşmiyor. Sıfırlama iptal edildi.');
+    }
+
+    const [{ value: totalBefore }] = await db.select({ value: count() }).from(nonconformities).where(eq(nonconformities.projectId, project.id));
+
+    await db.delete(nonconformities).where(eq(nonconformities.projectId, project.id));
+
+    await logAudit({
+      userId: req.user.sub,
+      action: 'PROJECT_RESET_NONCONFORMITIES',
+      entityType: 'project',
+      entityId: project.id,
+      details: { deletedCount: totalBefore },
+      ipAddress: req.ip,
+    });
+
+    res.json({ success: true, deletedCount: totalBefore });
   })
 );
 

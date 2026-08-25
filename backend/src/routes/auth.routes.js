@@ -18,7 +18,10 @@ const router = express.Router();
 // Kaba kuvvet saldırılarına karşı giriş denemelerini sınırla.
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  // Test ortamında tek bir test dosyası onlarca senaryoda giriş yapar (gerçek bir kullanıcının
+  // 15 dakikada yapacağı denemeden çok daha fazla); bu yüzden test'te limit gevşetilir.
+  // Üretimde kaba kuvvet korumasına dokunulmaz.
+  max: process.env.NODE_ENV === 'test' ? 100000 : 20,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: { message: 'Çok fazla giriş denemesi yapıldı. Lütfen daha sonra tekrar deneyin.' } },
@@ -47,6 +50,7 @@ async function loadValidInvite(token) {
 const loginSchema = z.object({
   username: z.string().min(1, 'Kullanıcı adı zorunludur.'),
   password: z.string().min(1, 'Şifre zorunludur.'),
+  rememberMe: z.boolean().optional().default(false),
 });
 
 // ADIM 1: kullanıcı adı + şifre doğrulama.
@@ -60,7 +64,7 @@ router.post(
     if (!parsed.success) {
       throw ApiError.badRequest('Geçersiz giriş bilgisi.', parsed.error.flatten());
     }
-    const { username, password } = parsed.data;
+    const { username, password, rememberMe } = parsed.data;
 
     const [user] = await db.select().from(users).where(eq(users.username, username)).limit(1);
 
@@ -76,11 +80,12 @@ router.post(
     await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
 
     if (user.isSystemAdmin) {
-      const accessToken = signAccessToken({ sub: user.id, isSystemAdmin: true, permissions: [] });
+      const accessToken = signAccessToken({ sub: user.id, isSystemAdmin: true, permissions: [] }, { rememberMe });
       await logAudit({ userId: user.id, action: 'LOGIN_ADMIN', ipAddress: req.ip });
       return res.json({
         isSystemAdmin: true,
         accessToken,
+        rememberMe,
         mustChangePassword: user.mustChangePassword,
         user: { id: user.id, fullName: user.fullName, username: user.username },
       });
@@ -103,7 +108,7 @@ router.post(
       throw ApiError.forbidden('Herhangi bir aktif projeye/göreve atanmamışsınız. Lütfen sistem yöneticinizle iletişime geçin.');
     }
 
-    const contextToken = signContextToken({ sub: user.id });
+    const contextToken = signContextToken({ sub: user.id, rememberMe });
     await logAudit({ userId: user.id, action: 'LOGIN_CREDENTIALS_OK', ipAddress: req.ip });
 
     res.json({
@@ -157,13 +162,16 @@ router.post(
 
     const permissionKeys = await getEffectivePermissions(user.id, projectId);
 
-    const accessToken = signAccessToken({
-      sub: user.id,
-      isSystemAdmin: false,
-      projectId,
-      roleId,
-      permissions: permissionKeys,
-    });
+    const accessToken = signAccessToken(
+      {
+        sub: user.id,
+        isSystemAdmin: false,
+        projectId,
+        roleId,
+        permissions: permissionKeys,
+      },
+      { rememberMe: !!decoded.rememberMe }
+    );
 
     await logAudit({
       userId: user.id,
@@ -176,6 +184,7 @@ router.post(
 
     res.json({
       accessToken,
+      rememberMe: !!decoded.rememberMe,
       mustChangePassword: user.mustChangePassword,
       user: { id: user.id, fullName: user.fullName, username: user.username },
       context: { projectId, roleId, permissions: permissionKeys },

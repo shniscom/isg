@@ -17,17 +17,18 @@ const {
   roles,
   employees,
   penalties,
+  dueDateExtensions,
   permissions,
   userPermissions,
 } = require('../db/schema');
 const { createNotification, createNotifications } = require('../services/notification.service');
 const { getSetting } = require('../services/settings.service');
 const { requireAuth } = require('../middleware/auth');
-const { requirePermission } = require('../middleware/permission');
+const { requirePermission, requireSystemAdmin } = require('../middleware/permission');
 const { asyncHandler } = require('../utils/asyncHandler');
 const { ApiError } = require('../utils/apiError');
 const { logAudit } = require('../utils/audit');
-const { generateNonconformityNumber, logStatusChange } = require('../services/nonconformity.service');
+const { generateNonconformityNumber, logStatusChange, loadAssigneeIdsFor } = require('../services/nonconformity.service');
 const { createViewUrl } = require('../services/storage.service');
 
 const router = express.Router();
@@ -193,8 +194,28 @@ router.get(
   requirePermission('rapor_goruntuleme'),
   asyncHandler(async (req, res) => {
     const projectId = resolveProjectId(req, req.query.projectId);
-    const range = ['today', 'week', 'month'].includes(req.query.range) ? req.query.range : 'today';
-    const from = rangeStartDate(range);
+    const range = ['today', 'week', 'month', 'custom'].includes(req.query.range) ? req.query.range : 'today';
+
+    let from;
+    let to = null;
+    if (range === 'custom') {
+      if (!req.query.from || !req.query.to) {
+        throw ApiError.badRequest('Özel tarih aralığı için "from" ve "to" parametreleri zorunludur.');
+      }
+      from = new Date(req.query.from);
+      to = new Date(req.query.to);
+      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) {
+        throw ApiError.badRequest('Geçersiz tarih aralığı.');
+      }
+    } else {
+      from = rangeStartDate(range);
+    }
+    const createdCondition = to
+      ? and(gte(nonconformities.createdAt, from), lte(nonconformities.createdAt, to))
+      : gte(nonconformities.createdAt, from);
+    const closedCondition = to
+      ? and(gte(nonconformities.closedAt, from), lte(nonconformities.closedAt, to))
+      : gte(nonconformities.closedAt, from);
 
     const myAssignedSubqueryRows = await db
       .select({ nonconformityId: nonconformityAssignees.nonconformityId })
@@ -206,7 +227,7 @@ router.get(
       db
         .select({ value: count() })
         .from(nonconformities)
-        .where(and(eq(nonconformities.projectId, projectId), gte(nonconformities.createdAt, from))),
+        .where(and(eq(nonconformities.projectId, projectId), createdCondition)),
       db
         .select({ value: count() })
         .from(nonconformities)
@@ -214,7 +235,7 @@ router.get(
           and(
             eq(nonconformities.projectId, projectId),
             eq(nonconformities.openedById, req.user.sub),
-            gte(nonconformities.createdAt, from)
+            createdCondition
           )
         ),
     ]);
@@ -230,7 +251,7 @@ router.get(
             and(
               eq(nonconformities.projectId, projectId),
               inArray(nonconformities.id, myAssignedIds),
-              gte(nonconformities.createdAt, from)
+              createdCondition
             )
           ),
         db
@@ -241,7 +262,7 @@ router.get(
               eq(nonconformities.projectId, projectId),
               inArray(nonconformities.id, myAssignedIds),
               eq(nonconformities.status, 'KAPALI'),
-              gte(nonconformities.closedAt, from)
+              closedCondition
             )
           ),
       ]);
@@ -253,7 +274,7 @@ router.get(
     const openedByCompanyRows = await db
       .select({ companyId: nonconformities.companyId, value: count() })
       .from(nonconformities)
-      .where(and(eq(nonconformities.projectId, projectId), gte(nonconformities.createdAt, from)))
+      .where(and(eq(nonconformities.projectId, projectId), createdCondition))
       .groupBy(nonconformities.companyId);
     const closedByCompanyRows = await db
       .select({ companyId: nonconformities.companyId, value: count() })
@@ -262,7 +283,7 @@ router.get(
         and(
           eq(nonconformities.projectId, projectId),
           eq(nonconformities.status, 'KAPALI'),
-          gte(nonconformities.closedAt, from)
+          closedCondition
         )
       )
       .groupBy(nonconformities.companyId);
@@ -288,12 +309,80 @@ router.get(
     res.json({
       range,
       from: from.toISOString(),
+      to: to ? to.toISOString() : null,
       totalOpened: totalOpenedRow?.value || 0,
       myOpened: myOpenedRow?.value || 0,
       myAssigned: myAssignedCount,
       myClosed: myClosedCount,
       companyBreakdown,
     });
+  })
+);
+
+/**
+ * Admin için tam kayıt dışa aktarımı: seçilen tarih aralığında (createdAt'e göre) açılmış tüm
+ * uygunsuzlukları, ilgili tüm alanlarıyla (firma, kategori, açan, atananlar vb.) birlikte
+ * JSON olarak döner; frontend bunu CSV'ye çevirip indirir. Yalnızca sistem admini kullanabilir.
+ */
+router.get(
+  '/full-export',
+  requireSystemAdmin,
+  asyncHandler(async (req, res) => {
+    const projectId = req.query.projectId;
+    if (!projectId) throw ApiError.badRequest('projectId parametresi zorunludur.');
+    if (!req.query.from || !req.query.to) throw ApiError.badRequest('"from" ve "to" parametreleri zorunludur.');
+
+    const from = new Date(req.query.from);
+    const to = new Date(req.query.to);
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) {
+      throw ApiError.badRequest('Geçersiz tarih aralığı.');
+    }
+
+    const rows = await db
+      .select()
+      .from(nonconformities)
+      .where(and(eq(nonconformities.projectId, projectId), gte(nonconformities.createdAt, from), lte(nonconformities.createdAt, to)))
+      .orderBy(nonconformities.createdAt);
+
+    if (rows.length === 0) {
+      return res.json({ nonconformities: [] });
+    }
+
+    const ncIds = rows.map((r) => r.id);
+    const [categoryRows, blockRows, companyRows, userRows, assigneeRows] = await Promise.all([
+      db.select().from(categories).where(eq(categories.projectId, projectId)),
+      db.select().from(projectBlocks).where(eq(projectBlocks.projectId, projectId)),
+      db.select().from(companies).where(eq(companies.projectId, projectId)),
+      db.select({ id: users.id, fullName: users.fullName }).from(users),
+      db.select().from(nonconformityAssignees).where(inArray(nonconformityAssignees.nonconformityId, ncIds)),
+    ]);
+    const categoryNameById = new Map(categoryRows.map((c) => [c.id, c.name]));
+    const blockNameById = new Map(blockRows.map((b) => [b.id, b.name]));
+    const companyNameById = new Map(companyRows.map((c) => [c.id, c.name]));
+    const userNameById = new Map(userRows.map((u) => [u.id, u.fullName]));
+    const assigneesByNc = new Map();
+    for (const a of assigneeRows) {
+      const list = assigneesByNc.get(a.nonconformityId) || [];
+      list.push(userNameById.get(a.userId) || a.userId);
+      assigneesByNc.set(a.nonconformityId, list);
+    }
+
+    const result = rows.map((nc) => ({
+      number: nc.number,
+      status: nc.status,
+      priority: nc.priority,
+      description: nc.description,
+      categoryName: nc.categoryId ? categoryNameById.get(nc.categoryId) || null : null,
+      blockName: nc.blockId ? blockNameById.get(nc.blockId) || null : null,
+      companyName: nc.companyId ? companyNameById.get(nc.companyId) || null : null,
+      openedByName: userNameById.get(nc.openedById) || null,
+      assigneeNames: (assigneesByNc.get(nc.id) || []).join('; '),
+      createdAt: nc.createdAt,
+      dueDate: nc.dueDate,
+      closedAt: nc.closedAt,
+    }));
+
+    res.json({ nonconformities: result });
   })
 );
 
@@ -421,6 +510,11 @@ router.post(
     if (invalidIds.length > 0) {
       throw ApiError.badRequest('Atanan kullanıcılardan bazıları bu projeye atanmamış veya pasif.');
     }
+    // Bir kişi kendi açtığı uygunsuzluğun sorumlusu olarak kendisini atayamaz (denetim/kontrol
+    // amacıyla açan ile sorumlu farklı kişiler olmalıdır).
+    if (uniqueAssignedUserIds.includes(req.user.sub)) {
+      throw ApiError.badRequest('Uygunsuzluğu açan kişi, kendisini sorumlu olarak atayamaz.');
+    }
 
     const result = await db.transaction(async (tx) => {
       const number = await generateNonconformityNumber(tx, projectId);
@@ -481,6 +575,125 @@ router.post(
     });
 
     res.status(201).json({ nonconformity: result });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Düzenleme ve silme: yalnızca admin veya uygunsuzluğu açan kişi yapabilir. Bu, test/deneme
+// sürecinde yanlış girilen kayıtların düzeltilebilmesi ve gereksiz kayıtların temizlenebilmesi
+// için eklenmiştir. Silme, kapatılmış (KAPALI) kayıtlar için yalnızca admin tarafından
+// yapılabilir - açan kişi denetim izini bozmasın diye kapanmış bir kaydı silemez.
+// ---------------------------------------------------------------------------
+const updateSchema = z.object({
+  categoryId: z.string().optional().nullable(),
+  blockId: z.string().optional().nullable(),
+  companyId: z.string().optional().nullable(),
+  employeeId: z.string().optional().nullable(),
+  description: z.string().min(5, 'Açıklama en az 5 karakter olmalıdır.').optional(),
+  correctionSuggestion: z.string().optional().nullable(),
+  riskScore: z.number().int().min(1).max(5).optional().nullable(),
+  priority: z.enum(['DUSUK', 'ORTA', 'YUKSEK', 'KRITIK']).optional(),
+  dueDate: z.string().datetime({ message: 'Geçerli bir termin tarihi giriniz.' }).optional(),
+  assignedUserIds: z.array(z.string().min(1)).min(1, 'En az bir atanan kişi seçilmelidir.').optional(),
+});
+
+async function loadEditableNonconformity(req) {
+  const [nc] = await db.select().from(nonconformities).where(eq(nonconformities.id, req.params.id)).limit(1);
+  if (!nc) throw ApiError.notFound('Uygunsuzluk bulunamadı.');
+  if (!req.user.isSystemAdmin && nc.projectId !== req.user.projectId) throw ApiError.forbidden();
+  const canEdit = req.user.isSystemAdmin || nc.openedById === req.user.sub;
+  if (!canEdit) throw ApiError.forbidden('Bu uygunsuzluğu yalnızca admin veya açan kişi düzenleyebilir/silebilir.');
+  return nc;
+}
+
+router.patch(
+  '/:id',
+  asyncHandler(async (req, res) => {
+    const nc = await loadEditableNonconformity(req);
+
+    const parsed = updateSchema.safeParse(req.body);
+    if (!parsed.success) throw ApiError.badRequest('Geçersiz uygunsuzluk bilgisi.', parsed.error.flatten());
+    const data = parsed.data;
+
+    let dueDate;
+    if (data.dueDate) {
+      dueDate = new Date(data.dueDate);
+    }
+
+    let uniqueAssignedUserIds;
+    if (data.assignedUserIds) {
+      uniqueAssignedUserIds = [...new Set(data.assignedUserIds)];
+      if (uniqueAssignedUserIds.includes(nc.openedById)) {
+        throw ApiError.badRequest('Uygunsuzluğu açan kişi, kendisini sorumlu olarak atayamaz.');
+      }
+      const assignedMembers = await db
+        .select({ userId: userProjects.userId })
+        .from(userProjects)
+        .where(and(inArray(userProjects.userId, uniqueAssignedUserIds), eq(userProjects.projectId, nc.projectId), eq(userProjects.isActive, true)));
+      const validAssignedIds = new Set(assignedMembers.map((m) => m.userId));
+      const invalidIds = uniqueAssignedUserIds.filter((uid) => !validAssignedIds.has(uid));
+      if (invalidIds.length > 0) throw ApiError.badRequest('Atanan kullanıcılardan bazıları bu projeye atanmamış veya pasif.');
+    }
+
+    const updated = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(nonconformities)
+        .set({
+          ...(data.categoryId !== undefined ? { categoryId: data.categoryId || null } : {}),
+          ...(data.blockId !== undefined ? { blockId: data.blockId || null } : {}),
+          ...(data.companyId !== undefined ? { companyId: data.companyId || null } : {}),
+          ...(data.employeeId !== undefined ? { employeeId: data.employeeId || null } : {}),
+          ...(data.description !== undefined ? { description: data.description } : {}),
+          ...(data.correctionSuggestion !== undefined ? { correctionSuggestion: data.correctionSuggestion || null } : {}),
+          ...(data.riskScore !== undefined ? { riskScore: data.riskScore || null } : {}),
+          ...(data.priority !== undefined ? { priority: data.priority } : {}),
+          ...(dueDate ? { dueDate } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(nonconformities.id, nc.id))
+        .returning();
+
+      if (uniqueAssignedUserIds) {
+        await tx.delete(nonconformityAssignees).where(eq(nonconformityAssignees.nonconformityId, nc.id));
+        await tx.insert(nonconformityAssignees).values(uniqueAssignedUserIds.map((userId) => ({ nonconformityId: nc.id, userId })));
+      }
+
+      return row;
+    });
+
+    await logAudit({
+      userId: req.user.sub,
+      action: 'NONCONFORMITY_UPDATE',
+      entityType: 'nonconformity',
+      entityId: nc.id,
+      details: data,
+      ipAddress: req.ip,
+    });
+
+    res.json({ nonconformity: updated });
+  })
+);
+
+router.delete(
+  '/:id',
+  asyncHandler(async (req, res) => {
+    const nc = await loadEditableNonconformity(req);
+    if (!req.user.isSystemAdmin && nc.status === 'KAPALI') {
+      throw ApiError.forbidden('Kapatılmış bir uygunsuzluğu yalnızca admin silebilir.');
+    }
+
+    await db.delete(nonconformities).where(eq(nonconformities.id, nc.id));
+
+    await logAudit({
+      userId: req.user.sub,
+      action: 'NONCONFORMITY_DELETE',
+      entityType: 'nonconformity',
+      entityId: nc.id,
+      details: { number: nc.number },
+      ipAddress: req.ip,
+    });
+
+    res.json({ success: true });
   })
 );
 
@@ -567,11 +780,36 @@ router.get(
       })
     );
 
-    // Ceza talebi oluşturma hakkı: termin geçmiş, hâlâ kapanmamış ve açan kişi (ya da admin).
+    // Zaten onay bekleyen bir ceza talebi varsa yeniden talep açılamaz (aynı uygunsuzluk için
+    // tek bir bekleyen talep olabilir).
+    const hasPendingPenalty = penaltyRows.some((p) => p.status === 'BEKLEMEDE');
+
+    // Ceza talebi oluşturma hakkı: termin geçmiş, hâlâ kapanmamış, açan kişi (ya da admin) ve
+    // bekleyen bir talep yoksa.
     const canRequestPenalty =
       (req.user.isSystemAdmin || nc.openedById === req.user.sub) &&
       nc.status !== 'KAPALI' &&
-      new Date(nc.dueDate).getTime() <= Date.now();
+      new Date(nc.dueDate).getTime() <= Date.now() &&
+      !hasPendingPenalty;
+
+    const extensionRows = await db
+      .select()
+      .from(dueDateExtensions)
+      .where(eq(dueDateExtensions.nonconformityId, nc.id))
+      .orderBy(desc(dueDateExtensions.requestedAt));
+    const ncExtensions = await Promise.all(
+      extensionRows.map(async (e) => {
+        const [requestedBy] = await db.select({ fullName: users.fullName }).from(users).where(eq(users.id, e.requestedById)).limit(1);
+        const decidedBy = e.decidedById
+          ? await db.select({ fullName: users.fullName }).from(users).where(eq(users.id, e.decidedById)).limit(1).then((r) => r[0])
+          : null;
+        return { ...e, requestedByName: requestedBy?.fullName || null, decidedByName: decidedBy?.fullName || null };
+      })
+    );
+    const hasPendingExtension = extensionRows.some((e) => e.status === 'BEKLEMEDE');
+    const isAssignee = assignees.some((a) => a.userId === req.user.sub);
+    const canRequestExtension = (isAssignee || req.user.isSystemAdmin) && nc.status !== 'KAPALI' && !hasPendingExtension;
+    const canDecideExtension = req.user.isSystemAdmin || nc.openedById === req.user.sub;
 
     res.json({
       nonconformity: {
@@ -585,11 +823,16 @@ router.get(
         employeeNationalId: employee?.nationalId || null,
         assignees,
         canRequestPenalty,
+        hasPendingPenalty,
+        canRequestExtension,
+        hasPendingExtension,
+        canDecideExtension,
       },
       photos,
       corrections,
       history: historyWithActors,
       penalties: ncPenalties,
+      dueDateExtensions: ncExtensions,
     });
   })
 );
@@ -837,6 +1080,15 @@ router.post(
       throw ApiError.conflict('Termin süresi henüz dolmadan ceza talebi oluşturulamaz.');
     }
 
+    const [existingPending] = await db
+      .select({ id: penalties.id })
+      .from(penalties)
+      .where(and(eq(penalties.nonconformityId, nc.id), eq(penalties.status, 'BEKLEMEDE')))
+      .limit(1);
+    if (existingPending) {
+      throw ApiError.conflict('Bu uygunsuzluk için zaten onay bekleyen bir ceza talebi var.');
+    }
+
     const [created] = await db
       .insert(penalties)
       .values({
@@ -889,6 +1141,233 @@ router.post(
     });
 
     res.status(201).json({ penalty: created, employeePriorApprovedCount });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Ek termin süresi talebi: termin dolmuş/dolmak üzere olan bir uygunsuzluk için, atanan kişi
+// ceza almamak amacıyla ek süre talep edebilir. Talep, açan kişiye (veya admine) onaya gider.
+// Onaylanırsa uygunsuzluğun termin tarihi güncellenir; reddedilirse açan kişi dilerse ayrıca
+// cezai işlem talebinde bulunabilir (mevcut ceza talebi ucu üzerinden, ayrıca bir işlem).
+// ---------------------------------------------------------------------------
+const extensionRequestSchema = z.object({
+  requestedNewDueDate: z.string().datetime({ message: 'Geçerli bir tarih giriniz.' }),
+  reason: z.string().min(5, 'Gerekçe en az 5 karakter olmalıdır.'),
+});
+
+router.post(
+  '/:id/extension-request',
+  asyncHandler(async (req, res) => {
+    const parsed = extensionRequestSchema.safeParse(req.body);
+    if (!parsed.success) throw ApiError.badRequest('Geçersiz ek süre talebi.', parsed.error.flatten());
+
+    const [nc] = await db.select().from(nonconformities).where(eq(nonconformities.id, req.params.id)).limit(1);
+    if (!nc) throw ApiError.notFound('Uygunsuzluk bulunamadı.');
+    if (!req.user.isSystemAdmin && nc.projectId !== req.user.projectId) throw ApiError.forbidden();
+    if (nc.status === 'KAPALI') throw ApiError.conflict('Kapatılmış bir uygunsuzluk için ek süre talep edilemez.');
+
+    const assigneeIds = await loadAssigneeIdsFor(nc.id);
+    if (!req.user.isSystemAdmin && !assigneeIds.includes(req.user.sub)) {
+      throw ApiError.forbidden('Ek süre talebini yalnızca uygunsuzluğa atanan kişiler oluşturabilir.');
+    }
+
+    const requestedNewDueDate = new Date(parsed.data.requestedNewDueDate);
+    if (requestedNewDueDate.getTime() <= new Date(nc.dueDate).getTime()) {
+      throw ApiError.badRequest('Yeni termin tarihi, mevcut termin tarihinden ileri bir tarih olmalıdır.');
+    }
+
+    const [existingPending] = await db
+      .select({ id: dueDateExtensions.id })
+      .from(dueDateExtensions)
+      .where(and(eq(dueDateExtensions.nonconformityId, nc.id), eq(dueDateExtensions.status, 'BEKLEMEDE')))
+      .limit(1);
+    if (existingPending) throw ApiError.conflict('Bu uygunsuzluk için zaten onay bekleyen bir ek süre talebi var.');
+
+    const [created] = await db
+      .insert(dueDateExtensions)
+      .values({
+        nonconformityId: nc.id,
+        requestedById: req.user.sub,
+        currentDueDate: nc.dueDate,
+        requestedNewDueDate,
+        reason: parsed.data.reason,
+      })
+      .returning();
+
+    const adminUsers = await db.select({ id: users.id }).from(users).where(eq(users.isSystemAdmin, true));
+    const notifyIds = [...new Set([nc.openedById, ...adminUsers.map((u) => u.id)])];
+    await createNotifications(null, {
+      userIds: notifyIds,
+      nonconformityId: nc.id,
+      title: 'Ek süre talebi onay bekliyor',
+      message: `${nc.number} numaralı uygunsuzluk için ek termin süresi talep edildi, onayınızı bekliyor.`,
+    });
+
+    await logAudit({
+      userId: req.user.sub,
+      action: 'DUE_DATE_EXTENSION_REQUEST',
+      entityType: 'due_date_extension',
+      entityId: created.id,
+      details: { nonconformityId: nc.id, requestedNewDueDate: parsed.data.requestedNewDueDate },
+      ipAddress: req.ip,
+    });
+
+    res.status(201).json({ extension: created });
+  })
+);
+
+async function loadExtensionWithNc(id) {
+  const [row] = await db
+    .select({ extension: dueDateExtensions, nonconformity: nonconformities })
+    .from(dueDateExtensions)
+    .innerJoin(nonconformities, eq(dueDateExtensions.nonconformityId, nonconformities.id))
+    .where(eq(dueDateExtensions.id, id))
+    .limit(1);
+  return row;
+}
+
+router.post(
+  '/:id/extension-request/:extId/approve',
+  asyncHandler(async (req, res) => {
+    const row = await loadExtensionWithNc(req.params.extId);
+    if (!row || row.nonconformity.id !== req.params.id) throw ApiError.notFound('Ek süre talebi bulunamadı.');
+    const { extension: ext, nonconformity: nc } = row;
+    if (!req.user.isSystemAdmin && nc.projectId !== req.user.projectId) throw ApiError.forbidden();
+    if (!req.user.isSystemAdmin && nc.openedById !== req.user.sub) {
+      throw ApiError.forbidden('Ek süre talebini yalnızca uygunsuzluğu açan kişi veya admin onaylayabilir.');
+    }
+    if (ext.status !== 'BEKLEMEDE') throw ApiError.conflict('Bu talep zaten karara bağlanmış.');
+
+    const schema = z.object({ decisionNote: z.string().optional().nullable() });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) throw ApiError.badRequest('Geçersiz istek.');
+
+    await db.transaction(async (tx) => {
+      await tx
+        .update(dueDateExtensions)
+        .set({ status: 'ONAYLANDI', decidedById: req.user.sub, decidedAt: new Date(), decisionNote: parsed.data.decisionNote || null })
+        .where(eq(dueDateExtensions.id, ext.id));
+
+      // Termin tarihi güncellenir; zamanlayıcı bayrakları sıfırlanır ki yeni termine göre
+      // 2/3 uyarısı ve dolum bildirimi tekrar doğru zamanda çalışsın.
+      await tx
+        .update(nonconformities)
+        .set({ dueDate: ext.requestedNewDueDate, deadlineReminderSentAt: null, deadlineExpiredNotifiedAt: null, updatedAt: new Date() })
+        .where(eq(nonconformities.id, nc.id));
+
+      await logStatusChange(tx, {
+        nonconformityId: nc.id,
+        fromStatus: nc.status,
+        toStatus: nc.status,
+        actorId: req.user.sub,
+        note: `Ek süre talebi onaylandı, yeni termin: ${new Date(ext.requestedNewDueDate).toLocaleString('tr-TR')}.`,
+      });
+    });
+
+    const assigneeIds = await loadAssigneeIdsFor(nc.id);
+    await createNotifications(null, {
+      userIds: [...new Set([ext.requestedById, ...assigneeIds])],
+      nonconformityId: nc.id,
+      title: 'Ek süre talebiniz onaylandı',
+      message: `${nc.number} numaralı uygunsuzluk için ek süre talebiniz onaylandı. Yeni termin: ${new Date(ext.requestedNewDueDate).toLocaleString('tr-TR')}.`,
+    });
+
+    await logAudit({ userId: req.user.sub, action: 'DUE_DATE_EXTENSION_APPROVE', entityType: 'due_date_extension', entityId: ext.id, ipAddress: req.ip });
+    res.json({ success: true });
+  })
+);
+
+router.post(
+  '/:id/extension-request/:extId/reject',
+  asyncHandler(async (req, res) => {
+    const row = await loadExtensionWithNc(req.params.extId);
+    if (!row || row.nonconformity.id !== req.params.id) throw ApiError.notFound('Ek süre talebi bulunamadı.');
+    const { extension: ext, nonconformity: nc } = row;
+    if (!req.user.isSystemAdmin && nc.projectId !== req.user.projectId) throw ApiError.forbidden();
+    if (!req.user.isSystemAdmin && nc.openedById !== req.user.sub) {
+      throw ApiError.forbidden('Ek süre talebini yalnızca uygunsuzluğu açan kişi veya admin reddedebilir.');
+    }
+    if (ext.status !== 'BEKLEMEDE') throw ApiError.conflict('Bu talep zaten karara bağlanmış.');
+
+    const schema = z.object({ decisionNote: z.string().min(3, 'Red gerekçesi zorunludur.') });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) throw ApiError.badRequest('Red gerekçesi zorunludur.', parsed.error.flatten());
+
+    await db
+      .update(dueDateExtensions)
+      .set({ status: 'REDDEDILDI', decidedById: req.user.sub, decidedAt: new Date(), decisionNote: parsed.data.decisionNote })
+      .where(eq(dueDateExtensions.id, ext.id));
+
+    await createNotification(null, {
+      userId: ext.requestedById,
+      nonconformityId: nc.id,
+      title: 'Ek süre talebiniz reddedildi',
+      message: `${nc.number} numaralı uygunsuzluk için ek süre talebiniz reddedildi: ${parsed.data.decisionNote}. Uygunsuzluğu kapatmadığınız sürece cezai işlem başlatılabilir.`,
+    });
+
+    await logAudit({ userId: req.user.sub, action: 'DUE_DATE_EXTENSION_REJECT', entityType: 'due_date_extension', entityId: ext.id, ipAddress: req.ip });
+    res.json({ success: true });
+  })
+);
+
+// Admin, bekleyen bir talep olmadan da doğrudan termin süresi uzatabilir (ör. saha koşulları
+// nedeniyle proaktif karar). Bu işlem de kayıt altına alınır (ONAYLANDI durumunda bir
+// due_date_extensions satırı olarak), böylece geçmişte tutarlı bir tarihçe kalır.
+const adminExtendSchema = z.object({
+  newDueDate: z.string().datetime({ message: 'Geçerli bir tarih giriniz.' }),
+  note: z.string().optional().nullable(),
+});
+
+router.post(
+  '/:id/extend-due-date',
+  requireSystemAdmin,
+  asyncHandler(async (req, res) => {
+    const parsed = adminExtendSchema.safeParse(req.body);
+    if (!parsed.success) throw ApiError.badRequest('Geçersiz istek.', parsed.error.flatten());
+
+    const [nc] = await db.select().from(nonconformities).where(eq(nonconformities.id, req.params.id)).limit(1);
+    if (!nc) throw ApiError.notFound('Uygunsuzluk bulunamadı.');
+    if (nc.status === 'KAPALI') throw ApiError.conflict('Kapatılmış bir uygunsuzluğun termini değiştirilemez.');
+
+    const newDueDate = new Date(parsed.data.newDueDate);
+
+    await db.transaction(async (tx) => {
+      await tx.insert(dueDateExtensions).values({
+        nonconformityId: nc.id,
+        requestedById: req.user.sub,
+        currentDueDate: nc.dueDate,
+        requestedNewDueDate: newDueDate,
+        reason: 'Admin tarafından doğrudan verildi.',
+        status: 'ONAYLANDI',
+        decidedById: req.user.sub,
+        decidedAt: new Date(),
+        decisionNote: parsed.data.note || null,
+      });
+
+      await tx
+        .update(nonconformities)
+        .set({ dueDate: newDueDate, deadlineReminderSentAt: null, deadlineExpiredNotifiedAt: null, updatedAt: new Date() })
+        .where(eq(nonconformities.id, nc.id));
+
+      await logStatusChange(tx, {
+        nonconformityId: nc.id,
+        fromStatus: nc.status,
+        toStatus: nc.status,
+        actorId: req.user.sub,
+        note: `Admin tarafından termin tarihi güncellendi: ${newDueDate.toLocaleString('tr-TR')}.`,
+      });
+    });
+
+    const assigneeIds = await loadAssigneeIdsFor(nc.id);
+    await createNotifications(null, {
+      userIds: [...new Set([nc.openedById, ...assigneeIds])],
+      nonconformityId: nc.id,
+      title: 'Termin tarihi güncellendi',
+      message: `${nc.number} numaralı uygunsuzluğun termin tarihi admin tarafından güncellendi: ${newDueDate.toLocaleString('tr-TR')}.${parsed.data.note ? ` Not: ${parsed.data.note}` : ''}`,
+    });
+
+    await logAudit({ userId: req.user.sub, action: 'DUE_DATE_EXTEND_ADMIN', entityType: 'nonconformity', entityId: nc.id, details: { newDueDate: parsed.data.newDueDate }, ipAddress: req.ip });
+    res.json({ success: true });
   })
 );
 
