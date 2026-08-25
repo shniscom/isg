@@ -110,7 +110,7 @@ export function Layout() {
           <div className="fixed inset-0 z-20 bg-black/30 lg:hidden" onClick={() => setMenuOpen(false)} />
         )}
 
-        <main className="min-h-[calc(100vh-57px)] flex-1 p-4 sm:p-6">
+        <main className="min-h-[calc(100vh-57px)] min-w-0 flex-1 overflow-x-hidden p-4 sm:p-6">
           <Outlet />
         </main>
       </div>
