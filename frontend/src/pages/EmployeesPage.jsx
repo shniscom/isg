@@ -59,6 +59,10 @@ export function EmployeesPage() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [rowDeletingId, setRowDeletingId] = useState(null);
 
+  const PAGE_SIZE = 30;
+  const [page, setPage] = useState(1);
+  const [pageInfo, setPageInfo] = useState(null); // { total, totalPages }
+
   useEffect(() => {
     if (user?.isSystemAdmin) {
       apiClient
@@ -87,24 +91,32 @@ export function EmployeesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProjectId]);
 
-  function loadEmployees() {
+  function loadEmployees(targetPage) {
     if (!activeProjectId || !selectedCompany) return;
-    const params = { companyId: selectedCompany.id, status: statusTab, sortBy };
+    const params = { companyId: selectedCompany.id, status: statusTab, sortBy, page: targetPage || page, pageSize: PAGE_SIZE };
     if (user?.isSystemAdmin) params.projectId = activeProjectId;
     if (search) params.q = search;
     apiClient
       .get('/employees', { params })
       .then(({ data }) => {
         setEmployees(data.employees);
+        setPageInfo({ total: data.total ?? data.employees.length, totalPages: data.totalPages ?? 1 });
         setSelectedIds(new Set());
       })
       .catch((err) => setError(getErrorMessage(err)));
   }
 
+  // Firma, durum, sıralama veya arama değişince ilk sayfaya dön.
   useEffect(() => {
-    loadEmployees();
+    setPage(1);
+    loadEmployees(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCompany, statusTab, sortBy, search]);
+
+  useEffect(() => {
+    if (page > 1) loadEmployees(page);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
 
   async function handleFileChange(e) {
     const file = e.target.files?.[0];
@@ -479,6 +491,30 @@ export function EmployeesPage() {
           );
         })}
       </div>
+
+      {pageInfo && pageInfo.totalPages > 1 && (
+        <div className="flex items-center justify-between gap-2 pt-1 text-sm">
+          <button
+            type="button"
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page <= 1}
+            className="rounded-lg px-3 py-1.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-40"
+          >
+            ‹ Önceki
+          </button>
+          <span className="text-slate-500">
+            Sayfa {page} / {pageInfo.totalPages} · {pageInfo.total} kayıt
+          </span>
+          <button
+            type="button"
+            onClick={() => setPage((p) => Math.min(pageInfo.totalPages, p + 1))}
+            disabled={page >= pageInfo.totalPages}
+            className="rounded-lg px-3 py-1.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-40"
+          >
+            Sonraki ›
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -168,12 +168,24 @@ router.get(
     const sortColumn = SORTABLE_COLUMNS[req.query.sortBy] || employees.fullName;
     const sortDir = req.query.sortDir === 'desc' ? desc : req.query.sortDir === 'asc' ? asc : req.query.sortBy === 'startDate' ? desc : asc;
 
-    const rows = await db
+    // Sayfalama opsiyoneldir: page parametresi verilmezse (ör. uygunsuzluk açma formundaki
+    // aranabilir seçici için) tüm liste döner, uzun listelerin sayfa-sayfa gezilebildiği
+    // Çalışanlar sekmesi ise page/pageSize gönderir.
+    const pageParam = req.query.page ? parseInt(req.query.page, 10) : null;
+    const usePagination = Number.isInteger(pageParam) && pageParam > 0;
+    const pageSize = Math.min(Math.max(parseInt(req.query.pageSize, 10) || 30, 1), 200);
+    const page = usePagination ? pageParam : 1;
+
+    let query = db
       .select(EMPLOYEE_LIST_COLUMNS)
       .from(employees)
       .leftJoin(companies, eq(employees.companyId, companies.id))
       .where(and(...conditions))
       .orderBy(sortDir(sortColumn));
+    if (usePagination) {
+      query = query.limit(pageSize).offset((page - 1) * pageSize);
+    }
+    const rows = await query;
 
     const warningCounts = await db
       .select({ employeeId: nonconformities.employeeId, value: count() })
@@ -183,7 +195,25 @@ router.get(
     const warningByEmployee = new Map(warningCounts.filter((r) => r.employeeId).map((r) => [r.employeeId, r.value]));
 
     const rowsWithCounts = rows.map((r) => ({ ...r, warningCount: warningByEmployee.get(r.id) || 0 }));
-    res.json({ employees: rowsWithCounts });
+
+    if (!usePagination) {
+      res.json({ employees: rowsWithCounts });
+      return;
+    }
+
+    const [{ value: total }] = await db
+      .select({ value: count() })
+      .from(employees)
+      .leftJoin(companies, eq(employees.companyId, companies.id))
+      .where(and(...conditions));
+
+    res.json({
+      employees: rowsWithCounts,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    });
   })
 );
 
@@ -473,49 +503,57 @@ router.post(
     const byName = new Map(existing.map((e) => [e.fullName.trim().toLowerCase(), e]));
 
     for (let i = 0; i < parsed.data.rows.length; i++) {
-      const row = parsed.data.rows[i];
-      const fullName = (row.fullName || '').trim();
-      const nationalId = (row.nationalId || '').trim();
-      const position = (row.position || '').trim();
-      const startDate = (row.startDate || '').trim();
-      if (!fullName || !nationalId || !position || !startDate) {
+      // Tek bir satırdaki beklenmeyen bir hata (bozuk hücre, geçersiz değer vb.) tüm isteği
+      // 500 ile düşürmemeli - o satır atlanıp devam edilir; aksi halde önceki satırlar zaten
+      // veritabanına yazılmış olsa bile kullanıcıya genel bir sunucu hatası dönerdi.
+      try {
+        const row = parsed.data.rows[i];
+        const fullName = (row.fullName || '').trim();
+        const nationalId = (row.nationalId || '').trim();
+        const position = (row.position || '').trim();
+        const startDate = (row.startDate || '').trim();
+        if (!fullName || !nationalId || !position || !startDate) {
+          skipped += 1;
+          errors.push(`Satır ${i + 2}: TC no, ad soyad, görev ve giriş tarihi zorunludur, atlandı.`);
+          continue;
+        }
+        const matchKey = nationalId || fullName.toLowerCase();
+        const existingRow = byNationalId.get(nationalId) || byName.get(fullName.toLowerCase());
+
+        const values = {
+          fullName,
+          nationalId,
+          position,
+          isgTrainingDate: toDateOrNull(row.isgTrainingDate),
+          isgTrainingExpiryDate: toDateOrNull(row.isgTrainingExpiryDate),
+          medicalExamDate: toDateOrNull(row.medicalExamDate),
+          startWorkTrainingNote: (row.startWorkTrainingNote || '').trim() || null,
+          ek2Note: (row.ek2Note || '').trim() || null,
+          healthAuthoritySignatureNote: (row.healthAuthoritySignatureNote || '').trim() || null,
+          isgRole: (row.isgRole || '').trim() || null,
+          startDate: toDateOrNull(startDate),
+        };
+
+        if (existingRow) {
+          await db.update(employees).set(values).where(eq(employees.id, existingRow.id));
+          updated += 1;
+          const merged = { ...existingRow, ...values };
+          byNationalId.set(nationalId, merged);
+          byName.set(fullName.toLowerCase(), merged);
+        } else {
+          const [createdRow] = await db
+            .insert(employees)
+            .values({ projectId, companyId, isActive: true, ...values })
+            .returning();
+          created += 1;
+          byNationalId.set(nationalId, createdRow);
+          byName.set(fullName.toLowerCase(), createdRow);
+        }
+        seenKeys.add(matchKey);
+      } catch (err) {
         skipped += 1;
-        errors.push(`Satır ${i + 2}: TC no, ad soyad, görev ve giriş tarihi zorunludur, atlandı.`);
-        continue;
+        errors.push(`Satır ${i + 2}: işlenirken hata oluştu (${err.message}), atlandı.`);
       }
-      const matchKey = nationalId || fullName.toLowerCase();
-      const existingRow = byNationalId.get(nationalId) || byName.get(fullName.toLowerCase());
-
-      const values = {
-        fullName,
-        nationalId,
-        position,
-        isgTrainingDate: toDateOrNull(row.isgTrainingDate),
-        isgTrainingExpiryDate: toDateOrNull(row.isgTrainingExpiryDate),
-        medicalExamDate: toDateOrNull(row.medicalExamDate),
-        startWorkTrainingNote: (row.startWorkTrainingNote || '').trim() || null,
-        ek2Note: (row.ek2Note || '').trim() || null,
-        healthAuthoritySignatureNote: (row.healthAuthoritySignatureNote || '').trim() || null,
-        isgRole: (row.isgRole || '').trim() || null,
-        startDate: toDateOrNull(startDate),
-      };
-
-      if (existingRow) {
-        await db.update(employees).set(values).where(eq(employees.id, existingRow.id));
-        updated += 1;
-        const merged = { ...existingRow, ...values };
-        byNationalId.set(nationalId, merged);
-        byName.set(fullName.toLowerCase(), merged);
-      } else {
-        const [createdRow] = await db
-          .insert(employees)
-          .values({ projectId, companyId, isActive: true, ...values })
-          .returning();
-        created += 1;
-        byNationalId.set(nationalId, createdRow);
-        byName.set(fullName.toLowerCase(), createdRow);
-      }
-      seenKeys.add(matchKey);
     }
 
     for (const emp of existing) {
