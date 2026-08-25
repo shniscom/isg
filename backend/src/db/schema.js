@@ -196,10 +196,15 @@ const employees = pgTable('employees', {
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   companyId: text('company_id').references(() => companies.id, { onDelete: 'set null' }),
   fullName: text('full_name').notNull(),
-  nationalId: text('national_id'), // T.C. kimlik no, biliniyorsa
-  position: text('position'), // görevi
-  isgTrainingCompleted: boolean('isg_training_completed').notNull().default(false),
-  medicalExamNote: text('medical_exam_note'), // tetkik bilgisi (serbest metin, ör. tarih/sonuç)
+  nationalId: text('national_id'), // T.C. kimlik no
+  position: text('position'), // SGK görev / iş kolu
+  isgTrainingDate: timestamp('isg_training_date', { withTimezone: true }), // İSG eğitimi aldığı tarih
+  isgTrainingExpiryDate: timestamp('isg_training_expiry_date', { withTimezone: true }), // İSG eğitimi geçerlilik (bitiş) tarihi
+  medicalExamDate: timestamp('medical_exam_date', { withTimezone: true }), // tetkik tarihi
+  startWorkTrainingNote: text('start_work_training_note'), // işe başlama eğitimi notu
+  ek2Note: text('ek2_note'), // EK-2 formu notu/tarihi (serbest metin)
+  healthAuthoritySignatureNote: text('health_authority_signature_note'), // sağlık yetkilisi imza notu
+  isgRole: text('isg_role'), // İSG görevi (ör. Çalışan Temsilcisi)
   startDate: timestamp('start_date', { withTimezone: true }), // işe giriş tarihi
   endDate: timestamp('end_date', { withTimezone: true }), // işten çıkış tarihi (doluysa arşivde sayılır)
   isActive: boolean('is_active').notNull().default(true),

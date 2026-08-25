@@ -1,6 +1,6 @@
 const express = require('express');
 const { z } = require('zod');
-const { eq, and, or, count, ilike, desc, asc } = require('drizzle-orm');
+const { eq, and, or, count, ilike, inArray, desc, asc } = require('drizzle-orm');
 const { db } = require('../db/client');
 const { employees, nonconformities, companies, userProjects } = require('../db/schema');
 const { requireAuth } = require('../middleware/auth');
@@ -122,6 +122,26 @@ const SORTABLE_COLUMNS = {
   createdAt: employees.createdAt,
 };
 
+const EMPLOYEE_LIST_COLUMNS = {
+  id: employees.id,
+  fullName: employees.fullName,
+  nationalId: employees.nationalId,
+  companyId: employees.companyId,
+  companyName: companies.name,
+  position: employees.position,
+  isgTrainingDate: employees.isgTrainingDate,
+  isgTrainingExpiryDate: employees.isgTrainingExpiryDate,
+  medicalExamDate: employees.medicalExamDate,
+  startWorkTrainingNote: employees.startWorkTrainingNote,
+  ek2Note: employees.ek2Note,
+  healthAuthoritySignatureNote: employees.healthAuthoritySignatureNote,
+  isgRole: employees.isgRole,
+  startDate: employees.startDate,
+  endDate: employees.endDate,
+  isActive: employees.isActive,
+  createdAt: employees.createdAt,
+};
+
 router.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -149,20 +169,7 @@ router.get(
     const sortDir = req.query.sortDir === 'desc' ? desc : req.query.sortDir === 'asc' ? asc : req.query.sortBy === 'startDate' ? desc : asc;
 
     const rows = await db
-      .select({
-        id: employees.id,
-        fullName: employees.fullName,
-        nationalId: employees.nationalId,
-        companyId: employees.companyId,
-        companyName: companies.name,
-        position: employees.position,
-        isgTrainingCompleted: employees.isgTrainingCompleted,
-        medicalExamNote: employees.medicalExamNote,
-        startDate: employees.startDate,
-        endDate: employees.endDate,
-        isActive: employees.isActive,
-        createdAt: employees.createdAt,
-      })
+      .select(EMPLOYEE_LIST_COLUMNS)
       .from(employees)
       .leftJoin(companies, eq(employees.companyId, companies.id))
       .where(and(...conditions))
@@ -182,7 +189,10 @@ router.get(
 
 // ---------------------------------------------------------------------------
 // Yeni çalışan kaydı (uygunsuzluk açma akışında "isim bilinen ama kayıtlı olmayan" bir
-// çalışanı hızlıca eklemek için). uygunsuzluk_acma yetkisi yeterlidir.
+// çalışanı hızlıca eklemek için, ya da Çalışanlar sekmesinden tekil ekleme). uygunsuzluk_acma
+// yetkisi yeterlidir. TC no/görev/giriş tarihi burada teknik olarak opsiyoneldir (uygunsuzluk
+// açma formundaki hızlı ekleme akışı sahada asgari bilgiyle çalışabilmelidir); Çalışanlar
+// sekmesindeki tam ekleme formu bu alanları arayüzde zorunlu kılar.
 // ---------------------------------------------------------------------------
 const createSchema = z.object({
   projectId: z.string().optional(),
@@ -195,8 +205,13 @@ const createSchema = z.object({
     .nullable()
     .or(z.literal('')),
   position: z.string().optional().nullable().or(z.literal('')),
-  isgTrainingCompleted: z.boolean().optional(),
-  medicalExamNote: z.string().optional().nullable().or(z.literal('')),
+  isgTrainingDate: z.string().optional().nullable().or(z.literal('')),
+  isgTrainingExpiryDate: z.string().optional().nullable().or(z.literal('')),
+  medicalExamDate: z.string().optional().nullable().or(z.literal('')),
+  startWorkTrainingNote: z.string().optional().nullable().or(z.literal('')),
+  ek2Note: z.string().optional().nullable().or(z.literal('')),
+  healthAuthoritySignatureNote: z.string().optional().nullable().or(z.literal('')),
+  isgRole: z.string().optional().nullable().or(z.literal('')),
   startDate: z.string().optional().nullable().or(z.literal('')),
   endDate: z.string().optional().nullable().or(z.literal('')),
 });
@@ -218,8 +233,13 @@ router.post(
         fullName: parsed.data.fullName,
         nationalId: parsed.data.nationalId || null,
         position: parsed.data.position || null,
-        isgTrainingCompleted: !!parsed.data.isgTrainingCompleted,
-        medicalExamNote: parsed.data.medicalExamNote || null,
+        isgTrainingDate: toDateOrNull(parsed.data.isgTrainingDate),
+        isgTrainingExpiryDate: toDateOrNull(parsed.data.isgTrainingExpiryDate),
+        medicalExamDate: toDateOrNull(parsed.data.medicalExamDate),
+        startWorkTrainingNote: parsed.data.startWorkTrainingNote || null,
+        ek2Note: parsed.data.ek2Note || null,
+        healthAuthoritySignatureNote: parsed.data.healthAuthoritySignatureNote || null,
+        isgRole: parsed.data.isgRole || null,
         startDate: toDateOrNull(parsed.data.startDate),
         endDate: toDateOrNull(endDate),
         isActive: !endDate,
@@ -248,8 +268,13 @@ const updateSchema = z.object({
   fullName: z.string().min(2).optional(),
   nationalId: z.string().regex(/^\d{11}$/).optional().nullable().or(z.literal('')),
   position: z.string().optional().nullable().or(z.literal('')),
-  isgTrainingCompleted: z.boolean().optional(),
-  medicalExamNote: z.string().optional().nullable().or(z.literal('')),
+  isgTrainingDate: z.string().optional().nullable().or(z.literal('')),
+  isgTrainingExpiryDate: z.string().optional().nullable().or(z.literal('')),
+  medicalExamDate: z.string().optional().nullable().or(z.literal('')),
+  startWorkTrainingNote: z.string().optional().nullable().or(z.literal('')),
+  ek2Note: z.string().optional().nullable().or(z.literal('')),
+  healthAuthoritySignatureNote: z.string().optional().nullable().or(z.literal('')),
+  isgRole: z.string().optional().nullable().or(z.literal('')),
   startDate: z.string().optional().nullable().or(z.literal('')),
   endDate: z.string().optional().nullable().or(z.literal('')),
 });
@@ -274,8 +299,13 @@ router.patch(
     if (parsed.data.fullName !== undefined) values.fullName = parsed.data.fullName;
     if (parsed.data.nationalId !== undefined) values.nationalId = parsed.data.nationalId || null;
     if (parsed.data.position !== undefined) values.position = parsed.data.position || null;
-    if (parsed.data.isgTrainingCompleted !== undefined) values.isgTrainingCompleted = !!parsed.data.isgTrainingCompleted;
-    if (parsed.data.medicalExamNote !== undefined) values.medicalExamNote = parsed.data.medicalExamNote || null;
+    if (parsed.data.isgTrainingDate !== undefined) values.isgTrainingDate = toDateOrNull(parsed.data.isgTrainingDate);
+    if (parsed.data.isgTrainingExpiryDate !== undefined) values.isgTrainingExpiryDate = toDateOrNull(parsed.data.isgTrainingExpiryDate);
+    if (parsed.data.medicalExamDate !== undefined) values.medicalExamDate = toDateOrNull(parsed.data.medicalExamDate);
+    if (parsed.data.startWorkTrainingNote !== undefined) values.startWorkTrainingNote = parsed.data.startWorkTrainingNote || null;
+    if (parsed.data.ek2Note !== undefined) values.ek2Note = parsed.data.ek2Note || null;
+    if (parsed.data.healthAuthoritySignatureNote !== undefined) values.healthAuthoritySignatureNote = parsed.data.healthAuthoritySignatureNote || null;
+    if (parsed.data.isgRole !== undefined) values.isgRole = parsed.data.isgRole || null;
     if (parsed.data.startDate !== undefined) values.startDate = toDateOrNull(parsed.data.startDate);
     if (parsed.data.endDate !== undefined) {
       const endDateRaw = parsed.data.endDate || null;
@@ -296,6 +326,64 @@ router.patch(
     });
 
     res.json({ employee: updated });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Tekil / toplu silme (sistem admini). Uygunsuzluk/ceza kayıtlarındaki employeeId
+// referansları FK tanımı gereği (onDelete: 'set null') otomatik olarak boşa düşer;
+// geçmiş uygunsuzluk kaydı silinmez, yalnızca çalışan bağlantısı kaldırılır.
+// ---------------------------------------------------------------------------
+router.delete(
+  '/:id',
+  requireSystemAdmin,
+  asyncHandler(async (req, res) => {
+    const [employee] = await db.select().from(employees).where(eq(employees.id, req.params.id)).limit(1);
+    if (!employee) throw ApiError.notFound('Çalışan bulunamadı.');
+
+    await db.delete(employees).where(eq(employees.id, employee.id));
+
+    await logAudit({
+      userId: req.user.sub,
+      action: 'EMPLOYEE_DELETE',
+      entityType: 'employee',
+      entityId: employee.id,
+      details: { fullName: employee.fullName },
+      ipAddress: req.ip,
+    });
+
+    res.json({ deleted: true });
+  })
+);
+
+const bulkDeleteSchema = z.object({
+  projectId: z.string().optional(),
+  ids: z.array(z.string()).min(1).max(1000),
+});
+
+router.post(
+  '/bulk-delete',
+  requireSystemAdmin,
+  asyncHandler(async (req, res) => {
+    const parsed = bulkDeleteSchema.safeParse(req.body);
+    if (!parsed.success) throw ApiError.badRequest('Geçersiz istek.', parsed.error.flatten());
+    const projectId = resolveProjectId(req, parsed.data.projectId);
+
+    const deletedRows = await db
+      .delete(employees)
+      .where(and(inArray(employees.id, parsed.data.ids), eq(employees.projectId, projectId)))
+      .returning({ id: employees.id });
+
+    await logAudit({
+      userId: req.user.sub,
+      action: 'EMPLOYEE_BULK_DELETE',
+      entityType: 'employee',
+      entityId: projectId,
+      details: { requestedCount: parsed.data.ids.length, deletedCount: deletedRows.length },
+      ipAddress: req.ip,
+    });
+
+    res.json({ deletedCount: deletedRows.length });
   })
 );
 
@@ -332,19 +420,24 @@ router.get(
 
 // ---------------------------------------------------------------------------
 // Excel içe aktarma: liste tarayıcıda (xlsx kütüphanesi ile) satırlara ayrıştırılıp buraya
-// JSON olarak gönderilir. Ad soyad + giriş tarihi zorunludur, eksik satırlar atlanır.
-// TC no (varsa) veya ad soyad ile eşleştirilerek mevcut kayıt güncellenir, yoksa yeni
-// kayıt oluşturulur. Yeni listede yer almayan, hâlâ aktif olan eski kayıtlar tarihsiz
-// (endDate boş) olarak arşivlenir - "işten çıkmış ama tarihi bilinmiyor" anlamına gelir.
+// JSON olarak gönderilir. Gerçek şirket şablonuna göre TC no, işe giriş tarihi, ad soyad ve
+// görev (SGK iş kolu) zorunludur; bunlardan biri eksikse satır atlanır. TC no ile eşleştirilerek
+// mevcut kayıt güncellenir (yoksa ad soyad ile), yoksa yeni kayıt oluşturulur. Yeni listede yer
+// almayan, hâlâ aktif olan eski kayıtlar tarihsiz (endDate boş) olarak arşivlenir - "işten
+// çıkmış ama tarihi bilinmiyor" anlamına gelir.
 // ---------------------------------------------------------------------------
 const importRowSchema = z.object({
   fullName: z.string().optional().nullable(),
   nationalId: z.string().optional().nullable(),
   position: z.string().optional().nullable(),
-  isgTrainingCompleted: z.boolean().optional(),
-  medicalExamNote: z.string().optional().nullable(),
+  isgTrainingDate: z.string().optional().nullable(),
+  isgTrainingExpiryDate: z.string().optional().nullable(),
+  medicalExamDate: z.string().optional().nullable(),
+  startWorkTrainingNote: z.string().optional().nullable(),
+  ek2Note: z.string().optional().nullable(),
+  healthAuthoritySignatureNote: z.string().optional().nullable(),
+  isgRole: z.string().optional().nullable(),
   startDate: z.string().optional().nullable(),
-  endDate: z.string().optional().nullable(),
 });
 
 const importSchema = z.object({
@@ -382,38 +475,44 @@ router.post(
     for (let i = 0; i < parsed.data.rows.length; i++) {
       const row = parsed.data.rows[i];
       const fullName = (row.fullName || '').trim();
+      const nationalId = (row.nationalId || '').trim();
+      const position = (row.position || '').trim();
       const startDate = (row.startDate || '').trim();
-      if (!fullName || !startDate) {
+      if (!fullName || !nationalId || !position || !startDate) {
         skipped += 1;
-        errors.push(`Satır ${i + 2}: Ad soyad ve giriş tarihi zorunludur, atlandı.`);
+        errors.push(`Satır ${i + 2}: TC no, ad soyad, görev ve giriş tarihi zorunludur, atlandı.`);
         continue;
       }
-      const nationalId = (row.nationalId || '').trim() || null;
-      const endDate = (row.endDate || '').trim() || null;
       const matchKey = nationalId || fullName.toLowerCase();
-      const existingRow = (nationalId && byNationalId.get(nationalId)) || byName.get(fullName.toLowerCase());
+      const existingRow = byNationalId.get(nationalId) || byName.get(fullName.toLowerCase());
 
       const values = {
         fullName,
         nationalId,
-        position: (row.position || '').trim() || null,
-        isgTrainingCompleted: !!row.isgTrainingCompleted,
-        medicalExamNote: (row.medicalExamNote || '').trim() || null,
+        position,
+        isgTrainingDate: toDateOrNull(row.isgTrainingDate),
+        isgTrainingExpiryDate: toDateOrNull(row.isgTrainingExpiryDate),
+        medicalExamDate: toDateOrNull(row.medicalExamDate),
+        startWorkTrainingNote: (row.startWorkTrainingNote || '').trim() || null,
+        ek2Note: (row.ek2Note || '').trim() || null,
+        healthAuthoritySignatureNote: (row.healthAuthoritySignatureNote || '').trim() || null,
+        isgRole: (row.isgRole || '').trim() || null,
         startDate: toDateOrNull(startDate),
-        endDate: toDateOrNull(endDate),
-        isActive: !endDate,
       };
 
       if (existingRow) {
         await db.update(employees).set(values).where(eq(employees.id, existingRow.id));
         updated += 1;
         const merged = { ...existingRow, ...values };
-        if (nationalId) byNationalId.set(nationalId, merged);
+        byNationalId.set(nationalId, merged);
         byName.set(fullName.toLowerCase(), merged);
       } else {
-        const [createdRow] = await db.insert(employees).values({ projectId, companyId, ...values }).returning();
+        const [createdRow] = await db
+          .insert(employees)
+          .values({ projectId, companyId, isActive: true, ...values })
+          .returning();
         created += 1;
-        if (nationalId) byNationalId.set(nationalId, createdRow);
+        byNationalId.set(nationalId, createdRow);
         byName.set(fullName.toLowerCase(), createdRow);
       }
       seenKeys.add(matchKey);

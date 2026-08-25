@@ -1,12 +1,29 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import apiClient, { getErrorMessage } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { Card, Alert, Badge, Button, Input, Textarea } from '../components/ui';
+import { Card, Alert, Badge, Button, Input } from '../components/ui';
 import { STATUS_LABELS, STATUS_BADGE_VARIANT, PRIORITY_LABELS, PRIORITY_BADGE_VARIANT, formatDate } from '../lib/nonconformity';
+import { trainingStatusChip, medicalExamStatusChip } from '../lib/employee';
+
+const CHIP_TONE_CLASS = {
+  default: 'bg-slate-100 text-slate-600',
+  success: 'bg-emerald-100 text-emerald-700',
+  warning: 'bg-amber-100 text-amber-800',
+  danger: 'bg-red-100 text-red-700',
+};
+
+function StatusChip({ chip }) {
+  return <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${CHIP_TONE_CLASS[chip.tone] || CHIP_TONE_CLASS.default}`}>{chip.text}</span>;
+}
+
+function toDateInput(value) {
+  return value ? value.slice(0, 10) : '';
+}
 
 export function EmployeeDetailPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const { user, hasPermission } = useAuth();
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -19,6 +36,8 @@ export function EmployeeDetailPage() {
   const [showExit, setShowExit] = useState(false);
   const [exitDate, setExitDate] = useState('');
   const [exitSubmitting, setExitSubmitting] = useState(false);
+
+  const [deleting, setDeleting] = useState(false);
 
   function load() {
     apiClient
@@ -40,9 +59,14 @@ export function EmployeeDetailPage() {
       fullName: data.employee.fullName || '',
       nationalId: data.employee.nationalId || '',
       position: data.employee.position || '',
-      isgTrainingCompleted: !!data.employee.isgTrainingCompleted,
-      medicalExamNote: data.employee.medicalExamNote || '',
-      startDate: data.employee.startDate ? data.employee.startDate.slice(0, 10) : '',
+      isgTrainingDate: toDateInput(data.employee.isgTrainingDate),
+      isgTrainingExpiryDate: toDateInput(data.employee.isgTrainingExpiryDate),
+      medicalExamDate: toDateInput(data.employee.medicalExamDate),
+      startWorkTrainingNote: data.employee.startWorkTrainingNote || '',
+      ek2Note: data.employee.ek2Note || '',
+      healthAuthoritySignatureNote: data.employee.healthAuthoritySignatureNote || '',
+      isgRole: data.employee.isgRole || '',
+      startDate: toDateInput(data.employee.startDate),
     });
     setShowEdit(true);
   }
@@ -55,8 +79,13 @@ export function EmployeeDetailPage() {
         fullName: editForm.fullName.trim(),
         nationalId: editForm.nationalId.trim() || null,
         position: editForm.position.trim() || null,
-        isgTrainingCompleted: editForm.isgTrainingCompleted,
-        medicalExamNote: editForm.medicalExamNote.trim() || null,
+        isgTrainingDate: editForm.isgTrainingDate || null,
+        isgTrainingExpiryDate: editForm.isgTrainingExpiryDate || null,
+        medicalExamDate: editForm.medicalExamDate || null,
+        startWorkTrainingNote: editForm.startWorkTrainingNote.trim() || null,
+        ek2Note: editForm.ek2Note.trim() || null,
+        healthAuthoritySignatureNote: editForm.healthAuthoritySignatureNote.trim() || null,
+        isgRole: editForm.isgRole.trim() || null,
         startDate: editForm.startDate || null,
       });
       setShowEdit(false);
@@ -93,10 +122,26 @@ export function EmployeeDetailPage() {
     }
   }
 
+  async function handleDelete() {
+    if (!data) return;
+    if (!window.confirm(`${data.employee.fullName} kalıcı olarak silinsin mi? Bu işlem geri alınamaz.`)) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await apiClient.delete(`/employees/${id}`);
+      navigate('/calisanlar');
+    } catch (err) {
+      setError(getErrorMessage(err));
+      setDeleting(false);
+    }
+  }
+
   if (error) return <Alert>{error}</Alert>;
   if (!data) return <p className="text-sm text-slate-500">Yükleniyor...</p>;
 
   const { employee, nonconformities } = data;
+  const trainingChip = trainingStatusChip(employee);
+  const medicalChip = medicalExamStatusChip(employee);
 
   return (
     <div className="mx-auto max-w-2xl space-y-5">
@@ -113,19 +158,16 @@ export function EmployeeDetailPage() {
           {!employee.isActive && <Badge variant="danger">Arşivde</Badge>}
         </div>
 
+        <div className="flex flex-wrap gap-1.5">
+          <StatusChip chip={trainingChip} />
+          <StatusChip chip={medicalChip} />
+          {employee.isgRole && <span className="rounded-full bg-purple-100 px-2.5 py-1 text-xs font-medium text-purple-700">🦺 İSG Görevi: {employee.isgRole}</span>}
+        </div>
+
         <div className="grid grid-cols-1 gap-x-4 gap-y-1.5 text-sm text-slate-600 sm:grid-cols-2">
           {employee.nationalId && (
             <div>
               <span className="text-slate-400">TC:</span> {employee.nationalId}
-            </div>
-          )}
-          <div>
-            <span className="text-slate-400">İSG Eğitimi:</span>{' '}
-            {employee.isgTrainingCompleted ? <Badge variant="success">Var</Badge> : <Badge>Yok</Badge>}
-          </div>
-          {employee.medicalExamNote && (
-            <div className="sm:col-span-2">
-              <span className="text-slate-400">Tetkik:</span> {employee.medicalExamNote}
             </div>
           )}
           <div>
@@ -134,6 +176,36 @@ export function EmployeeDetailPage() {
           {employee.endDate && (
             <div>
               <span className="text-slate-400">Çıkış Tarihi:</span> {formatDate(employee.endDate)}
+            </div>
+          )}
+          {employee.isgTrainingDate && (
+            <div>
+              <span className="text-slate-400">Eğitim Aldığı Tarih:</span> {formatDate(employee.isgTrainingDate)}
+            </div>
+          )}
+          {employee.isgTrainingExpiryDate && (
+            <div>
+              <span className="text-slate-400">Eğitim Geçerlilik Tarihi:</span> {formatDate(employee.isgTrainingExpiryDate)}
+            </div>
+          )}
+          {employee.medicalExamDate && (
+            <div>
+              <span className="text-slate-400">Tetkik Tarihi:</span> {formatDate(employee.medicalExamDate)}
+            </div>
+          )}
+          {employee.startWorkTrainingNote && (
+            <div>
+              <span className="text-slate-400">İşe Başlama Eğitimi:</span> {employee.startWorkTrainingNote}
+            </div>
+          )}
+          {employee.ek2Note && (
+            <div>
+              <span className="text-slate-400">EK-2:</span> {employee.ek2Note}
+            </div>
+          )}
+          {employee.healthAuthoritySignatureNote && (
+            <div>
+              <span className="text-slate-400">Sağlık Yetkilisi İmzası:</span> {employee.healthAuthoritySignatureNote}
             </div>
           )}
         </div>
@@ -155,6 +227,19 @@ export function EmployeeDetailPage() {
           </div>
         )}
 
+        {user?.isSystemAdmin && (
+          <div className="border-t border-slate-100 pt-3">
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={deleting}
+              className="text-sm font-medium text-red-600 hover:underline disabled:opacity-50"
+            >
+              {deleting ? 'Siliniyor...' : '🗑 Çalışanı Kalıcı Olarak Sil'}
+            </button>
+          </div>
+        )}
+
         {showExit && (
           <div className="space-y-2 rounded-xl bg-slate-50 p-3">
             <Input label="Çıkış Tarihi" type="date" value={exitDate} onChange={(e) => setExitDate(e.target.value)} />
@@ -167,41 +252,40 @@ export function EmployeeDetailPage() {
         {showEdit && editForm && (
           <div className="space-y-3 rounded-xl bg-slate-50 p-3">
             {editError && <Alert>{editError}</Alert>}
+            <Input label="Ad Soyad" value={editForm.fullName} onChange={(e) => setEditForm((f) => ({ ...f, fullName: e.target.value }))} />
+            <Input label="TC Kimlik No" value={editForm.nationalId} onChange={(e) => setEditForm((f) => ({ ...f, nationalId: e.target.value }))} />
+            <Input label="Görevi (SGK İş Kolu)" value={editForm.position} onChange={(e) => setEditForm((f) => ({ ...f, position: e.target.value }))} />
+            <Input label="Giriş Tarihi" type="date" value={editForm.startDate} onChange={(e) => setEditForm((f) => ({ ...f, startDate: e.target.value }))} />
             <Input
-              label="Ad Soyad"
-              value={editForm.fullName}
-              onChange={(e) => setEditForm((f) => ({ ...f, fullName: e.target.value }))}
-            />
-            <Input
-              label="TC Kimlik No"
-              value={editForm.nationalId}
-              onChange={(e) => setEditForm((f) => ({ ...f, nationalId: e.target.value }))}
-            />
-            <Input
-              label="Görevi"
-              value={editForm.position}
-              onChange={(e) => setEditForm((f) => ({ ...f, position: e.target.value }))}
-            />
-            <label className="flex items-center gap-2 text-sm text-slate-700">
-              <input
-                type="checkbox"
-                checked={editForm.isgTrainingCompleted}
-                onChange={(e) => setEditForm((f) => ({ ...f, isgTrainingCompleted: e.target.checked }))}
-              />
-              İSG Eğitimi Tamamlandı
-            </label>
-            <Textarea
-              label="Tetkik"
-              rows={2}
-              value={editForm.medicalExamNote}
-              onChange={(e) => setEditForm((f) => ({ ...f, medicalExamNote: e.target.value }))}
-            />
-            <Input
-              label="Giriş Tarihi"
+              label="Eğitim Aldığı Tarih"
               type="date"
-              value={editForm.startDate}
-              onChange={(e) => setEditForm((f) => ({ ...f, startDate: e.target.value }))}
+              value={editForm.isgTrainingDate}
+              onChange={(e) => setEditForm((f) => ({ ...f, isgTrainingDate: e.target.value }))}
             />
+            <Input
+              label="Eğitim Geçerlilik Tarihi"
+              type="date"
+              value={editForm.isgTrainingExpiryDate}
+              onChange={(e) => setEditForm((f) => ({ ...f, isgTrainingExpiryDate: e.target.value }))}
+            />
+            <Input
+              label="Tetkik Tarihi"
+              type="date"
+              value={editForm.medicalExamDate}
+              onChange={(e) => setEditForm((f) => ({ ...f, medicalExamDate: e.target.value }))}
+            />
+            <Input
+              label="İşe Başlama Eğitimi"
+              value={editForm.startWorkTrainingNote}
+              onChange={(e) => setEditForm((f) => ({ ...f, startWorkTrainingNote: e.target.value }))}
+            />
+            <Input label="EK-2" value={editForm.ek2Note} onChange={(e) => setEditForm((f) => ({ ...f, ek2Note: e.target.value }))} />
+            <Input
+              label="Sağlık Yetkilisi İmzası"
+              value={editForm.healthAuthoritySignatureNote}
+              onChange={(e) => setEditForm((f) => ({ ...f, healthAuthoritySignatureNote: e.target.value }))}
+            />
+            <Input label="İSG Görevi" value={editForm.isgRole} onChange={(e) => setEditForm((f) => ({ ...f, isgRole: e.target.value }))} />
             <div className="flex gap-2">
               <Button type="button" onClick={handleSaveEdit} disabled={editSubmitting}>
                 {editSubmitting ? 'Kaydediliyor...' : 'Kaydet'}

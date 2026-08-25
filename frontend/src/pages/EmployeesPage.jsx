@@ -1,93 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import * as XLSX from 'xlsx';
 import apiClient, { getErrorMessage } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { Card, Select, Input, Alert, Badge, Button } from '../components/ui';
 import { formatDate } from '../lib/nonconformity';
+import {
+  EXCEL_COLUMNS,
+  parseEmployeeExcel,
+  downloadEmployeeExcelTemplate,
+  trainingStatusChip,
+  medicalExamStatusChip,
+} from '../lib/employee';
 
 const SORT_OPTIONS = [
   { value: 'fullName', label: 'İsme Göre (A-Z)' },
   { value: 'startDate', label: 'Giriş Tarihine Göre (Yeni-Eski)' },
 ];
 
-// Excel içe aktarma kolon sırası: ilk satır başlık kabul edilir, veriler 2. satırdan başlar.
-const EXCEL_COLUMNS = [
-  { col: 'A', label: 'Sıra No', required: false, note: 'Bilgi amaçlı, sistem tarafından kullanılmaz.' },
-  { col: 'B', label: 'Ad Soyad', required: true, note: 'Zorunlu.' },
-  { col: 'C', label: 'TC Kimlik No', required: false, note: '11 haneli, boş bırakılabilir.' },
-  { col: 'D', label: 'Görevi', required: false, note: 'Örn: Elektrikçi, Boyacı.' },
-  { col: 'E', label: 'İSG Eğitimi', required: false, note: '"Var" yazılırsa tamamlanmış sayılır, aksi halde boş/"Yok" bırakılabilir.' },
-  { col: 'F', label: 'Tetkik', required: false, note: 'Serbest metin not alanı.' },
-  { col: 'G', label: 'Giriş Tarihi', required: true, note: 'Zorunlu. GG.AA.YYYY veya tarih hücresi formatında.' },
-  { col: 'H', label: 'Çıkış Tarihi', required: false, note: 'Hâlâ çalışıyorsa boş bırakılmalı.' },
-];
+const CHIP_TONE_CLASS = {
+  default: 'bg-slate-100 text-slate-600',
+  success: 'bg-emerald-100 text-emerald-700',
+  warning: 'bg-amber-100 text-amber-800',
+  danger: 'bg-red-100 text-red-700',
+};
 
-const EXCEL_TEMPLATE_HEADER = [
-  'Sıra No',
-  'Ad Soyad',
-  'TC Kimlik No',
-  'Görevi',
-  'İSG Eğitimi',
-  'Tetkik',
-  'Giriş Tarihi',
-  'Çıkış Tarihi',
-];
-
-const EXCEL_TEMPLATE_EXAMPLE_ROW = [1, 'Ali Veli', '12345678901', 'Elektrikçi', 'Var', 'Uygun', '01.01.2026', ''];
-
-function downloadEmployeeExcelTemplate() {
-  const sheet = XLSX.utils.aoa_to_sheet([EXCEL_TEMPLATE_HEADER, EXCEL_TEMPLATE_EXAMPLE_ROW]);
-  sheet['!cols'] = [{ wch: 8 }, { wch: 22 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 20 }, { wch: 14 }, { wch: 14 }];
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, sheet, 'Çalışanlar');
-  XLSX.writeFile(workbook, 'calisan_listesi_sablonu.xlsx');
-}
-
-function cellText(value) {
-  if (value === undefined || value === null) return '';
-  return String(value).trim();
-}
-
-function excelDateToIso(value) {
-  if (value instanceof Date && !isNaN(value.getTime())) {
-    const y = value.getFullYear();
-    const m = String(value.getMonth() + 1).padStart(2, '0');
-    const d = String(value.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  }
-  const text = cellText(value);
-  // gg.aa.yyyy gibi Türkçe tarih formatlarını da destekle
-  const trMatch = text.match(/^(\d{1,2})[./](\d{1,2})[./](\d{2,4})$/);
-  if (trMatch) {
-    const [, d, m, y] = trMatch;
-    const year = y.length === 2 ? `20${y}` : y;
-    return `${year}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-  }
-  return text;
-}
-
-/**
- * Excel kolon sırası: sıra no, ad soyad, tc no, görevi, İSG eğitimi, tetkik, giriş tarihi, çıkış tarihi.
- * İlk satır başlık kabul edilir. Ad soyad ve giriş tarihi zorunludur, boş olan satırlar backend tarafında atlanır.
- */
-async function parseEmployeeExcel(file) {
-  const buf = await file.arrayBuffer();
-  const workbook = XLSX.read(buf, { type: 'array', cellDates: true });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
-  const dataRows = rows.slice(1);
-  return dataRows
-    .filter((r) => Array.isArray(r) && r.some((cell) => cellText(cell) !== ''))
-    .map((r) => ({
-      fullName: cellText(r[1]),
-      nationalId: cellText(r[2]),
-      position: cellText(r[3]),
-      isgTrainingCompleted: cellText(r[4]).toLowerCase() === 'var',
-      medicalExamNote: cellText(r[5]),
-      startDate: excelDateToIso(r[6]),
-      endDate: excelDateToIso(r[7]),
-    }));
+function StatusChip({ chip }) {
+  return <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${CHIP_TONE_CLASS[chip.tone] || CHIP_TONE_CLASS.default}`}>{chip.text}</span>;
 }
 
 export function EmployeesPage() {
@@ -113,9 +51,13 @@ export function EmployeesPage() {
   const [showFormatGuide, setShowFormatGuide] = useState(false);
 
   const [showQuickAdd, setShowQuickAdd] = useState(false);
-  const [quickAdd, setQuickAdd] = useState({ fullName: '', nationalId: '', startDate: '' });
+  const [quickAdd, setQuickAdd] = useState({ fullName: '', nationalId: '', position: '', startDate: '' });
   const [quickAddSubmitting, setQuickAddSubmitting] = useState(false);
   const [quickAddError, setQuickAddError] = useState(null);
+
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [rowDeletingId, setRowDeletingId] = useState(null);
 
   useEffect(() => {
     if (user?.isSystemAdmin) {
@@ -152,7 +94,10 @@ export function EmployeesPage() {
     if (search) params.q = search;
     apiClient
       .get('/employees', { params })
-      .then(({ data }) => setEmployees(data.employees))
+      .then(({ data }) => {
+        setEmployees(data.employees);
+        setSelectedIds(new Set());
+      })
       .catch((err) => setError(getErrorMessage(err)));
   }
 
@@ -188,26 +133,76 @@ export function EmployeesPage() {
   }
 
   async function handleQuickAdd() {
-    if (!quickAdd.fullName.trim() || !quickAdd.startDate) return;
+    if (!quickAdd.fullName.trim() || !quickAdd.nationalId.trim() || !quickAdd.position.trim() || !quickAdd.startDate) return;
     setQuickAddSubmitting(true);
     setQuickAddError(null);
     try {
       const payload = {
         companyId: selectedCompany.id,
         fullName: quickAdd.fullName.trim(),
-        nationalId: quickAdd.nationalId.trim() || null,
+        nationalId: quickAdd.nationalId.trim(),
+        position: quickAdd.position.trim(),
         startDate: quickAdd.startDate,
       };
       if (user?.isSystemAdmin) payload.projectId = activeProjectId;
       await apiClient.post('/employees', payload);
       setShowQuickAdd(false);
-      setQuickAdd({ fullName: '', nationalId: '', startDate: '' });
+      setQuickAdd({ fullName: '', nationalId: '', position: '', startDate: '' });
       loadEmployees();
       loadCompanies();
     } catch (err) {
       setQuickAddError(getErrorMessage(err));
     } finally {
       setQuickAddSubmitting(false);
+    }
+  }
+
+  function toggleSelected(id) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    setSelectedIds((prev) => {
+      if (employees && prev.size === employees.length) return new Set();
+      return new Set(employees?.map((e) => e.id));
+    });
+  }
+
+  async function handleDeleteOne(emp) {
+    if (!window.confirm(`${emp.fullName} kalıcı olarak silinsin mi? Bu işlem geri alınamaz.`)) return;
+    setRowDeletingId(emp.id);
+    setError(null);
+    try {
+      await apiClient.delete(`/employees/${emp.id}`);
+      loadEmployees();
+      loadCompanies();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setRowDeletingId(null);
+    }
+  }
+
+  async function handleBulkDelete() {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm(`${selectedIds.size} çalışan kalıcı olarak silinsin mi? Bu işlem geri alınamaz.`)) return;
+    setBulkDeleting(true);
+    setError(null);
+    try {
+      const payload = { ids: Array.from(selectedIds) };
+      if (user?.isSystemAdmin) payload.projectId = activeProjectId;
+      await apiClient.post('/employees/bulk-delete', payload);
+      loadEmployees();
+      loadCompanies();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setBulkDeleting(false);
     }
   }
 
@@ -257,6 +252,8 @@ export function EmployeesPage() {
       </div>
     );
   }
+
+  const allSelected = employees && employees.length > 0 && selectedIds.size === employees.length;
 
   // --- Firma çalışanları ekranı ---
   return (
@@ -315,11 +312,7 @@ export function EmployeesPage() {
 
       {user?.isSystemAdmin && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-          <button
-            type="button"
-            onClick={() => setShowFormatGuide((v) => !v)}
-            className="font-medium text-brand-700 hover:underline"
-          >
+          <button type="button" onClick={() => setShowFormatGuide((v) => !v)} className="font-medium text-brand-700 hover:underline">
             {showFormatGuide ? 'Excel formatını gizle ▲' : 'ℹ️ Excel formatı nasıl olmalı? ▼'}
           </button>
           <button type="button" onClick={downloadEmployeeExcelTemplate} className="font-medium text-brand-700 hover:underline">
@@ -335,7 +328,7 @@ export function EmployeesPage() {
             <span className="font-medium">2. satırdan</span> itibaren, sütunlar aşağıdaki sırada olmalıdır:
           </p>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[420px] border-collapse text-left text-xs">
+            <table className="w-full min-w-[460px] border-collapse text-left text-xs">
               <thead>
                 <tr className="border-b border-slate-200 text-slate-500">
                   <th className="py-1.5 pr-3 font-medium">Sütun</th>
@@ -349,9 +342,7 @@ export function EmployeesPage() {
                   <tr key={c.col} className="border-b border-slate-100 align-top">
                     <td className="py-1.5 pr-3 font-mono font-semibold text-slate-700">{c.col}</td>
                     <td className="py-1.5 pr-3 text-slate-800">{c.label}</td>
-                    <td className="py-1.5 pr-3">
-                      {c.required ? <Badge variant="danger">Zorunlu</Badge> : <Badge>Opsiyonel</Badge>}
-                    </td>
+                    <td className="py-1.5 pr-3">{c.required ? <Badge variant="danger">Zorunlu</Badge> : <Badge>Opsiyonel</Badge>}</td>
                     <td className="py-1.5 text-slate-500">{c.note}</td>
                   </tr>
                 ))}
@@ -359,9 +350,9 @@ export function EmployeesPage() {
             </table>
           </div>
           <p className="text-xs text-slate-500">
-            Not: Ad Soyad veya Giriş Tarihi boş olan satırlar atlanır. Daha önce yüklenmiş, aktif bir çalışan yeni
-            listede yer almazsa otomatik olarak (tarihsiz) arşive alınır. Kolayca başlamak için "Boş şablon indir"
-            butonuyla örnek bir Excel dosyası indirip üzerine yazabilirsiniz.
+            Not: TC no, ad soyad, görev veya giriş tarihi boş olan satırlar atlanır. Daha önce yüklenmiş, aktif bir
+            çalışan yeni listede yer almazsa otomatik olarak (tarihsiz) arşive alınır. Kolayca başlamak için "Boş
+            şablon indir" butonuyla örnek bir Excel dosyası indirip üzerine yazabilirsiniz.
           </p>
         </Card>
       )}
@@ -386,9 +377,14 @@ export function EmployeesPage() {
             onChange={(e) => setQuickAdd((f) => ({ ...f, fullName: e.target.value }))}
           />
           <Input
-            label="TC Kimlik No"
+            label="TC Kimlik No *"
             value={quickAdd.nationalId}
             onChange={(e) => setQuickAdd((f) => ({ ...f, nationalId: e.target.value }))}
+          />
+          <Input
+            label="Görevi (SGK İş Kolu) *"
+            value={quickAdd.position}
+            onChange={(e) => setQuickAdd((f) => ({ ...f, position: e.target.value }))}
           />
           <Input
             label="Giriş Tarihi *"
@@ -399,7 +395,13 @@ export function EmployeesPage() {
           <Button
             type="button"
             onClick={handleQuickAdd}
-            disabled={quickAddSubmitting || !quickAdd.fullName.trim() || !quickAdd.startDate}
+            disabled={
+              quickAddSubmitting ||
+              !quickAdd.fullName.trim() ||
+              !quickAdd.nationalId.trim() ||
+              !quickAdd.position.trim() ||
+              !quickAdd.startDate
+            }
           >
             {quickAddSubmitting ? 'Ekleniyor...' : 'Kaydet'}
           </Button>
@@ -408,25 +410,74 @@ export function EmployeesPage() {
 
       {employees?.length === 0 && <p className="text-sm text-slate-500">Kayıt bulunamadı.</p>}
 
+      {user?.isSystemAdmin && employees?.length > 0 && (
+        <div className="flex items-center justify-between rounded-xl bg-slate-100 px-3 py-2 text-xs">
+          <label className="flex items-center gap-2 font-medium text-slate-600">
+            <input type="checkbox" checked={!!allSelected} onChange={toggleSelectAll} />
+            Tümünü seç ({selectedIds.size}/{employees.length})
+          </label>
+          {selectedIds.size > 0 && (
+            <button
+              type="button"
+              onClick={handleBulkDelete}
+              disabled={bulkDeleting}
+              className="font-semibold text-red-600 hover:underline disabled:opacity-50"
+            >
+              {bulkDeleting ? 'Siliniyor...' : `🗑 Seçilenleri Sil (${selectedIds.size})`}
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="space-y-2">
-        {employees?.map((emp) => (
-          <Link key={emp.id} to={`/calisanlar/${emp.id}`}>
-            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3 transition hover:border-brand-300">
-              <div className="min-w-0">
-                <div className="truncate font-medium text-slate-800">{emp.fullName}</div>
-                <div className="truncate text-xs text-slate-500">
-                  {emp.position ? `${emp.position} · ` : ''}
-                  {emp.nationalId ? `TC: ${emp.nationalId} · ` : ''}
-                  {emp.startDate ? `Giriş: ${formatDate(emp.startDate)}` : 'Giriş tarihi yok'}
-                  {emp.endDate ? ` · Çıkış: ${formatDate(emp.endDate)}` : ''}
-                </div>
+        {employees?.map((emp) => {
+          const trainingChip = trainingStatusChip(emp);
+          const medicalChip = medicalExamStatusChip(emp);
+          return (
+            <div key={emp.id} className="rounded-xl border border-slate-200 bg-white p-3 transition hover:border-brand-300">
+              <div className="flex items-start gap-2">
+                {user?.isSystemAdmin && (
+                  <input
+                    type="checkbox"
+                    className="mt-1.5 shrink-0"
+                    checked={selectedIds.has(emp.id)}
+                    onChange={() => toggleSelected(emp.id)}
+                  />
+                )}
+                <Link to={`/calisanlar/${emp.id}`} className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="truncate font-medium text-slate-800">{emp.fullName}</div>
+                    <Badge variant={emp.warningCount > 2 ? 'danger' : emp.warningCount > 0 ? 'warning' : 'default'}>
+                      {emp.warningCount} uyarı
+                    </Badge>
+                  </div>
+                  <div className="truncate text-xs text-slate-500">
+                    {emp.position ? `${emp.position} · ` : ''}
+                    {emp.nationalId ? `TC: ${emp.nationalId} · ` : ''}
+                    {emp.startDate ? `Giriş: ${formatDate(emp.startDate)}` : 'Giriş tarihi yok'}
+                    {emp.endDate ? ` · Çıkış: ${formatDate(emp.endDate)}` : ''}
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    <StatusChip chip={trainingChip} />
+                    <StatusChip chip={medicalChip} />
+                    {emp.isgRole && <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[11px] font-medium text-purple-700">🦺 {emp.isgRole}</span>}
+                  </div>
+                </Link>
+                {user?.isSystemAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteOne(emp)}
+                    disabled={rowDeletingId === emp.id}
+                    className="mt-1 shrink-0 rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                    aria-label="Çalışanı sil"
+                  >
+                    🗑
+                  </button>
+                )}
               </div>
-              <Badge variant={emp.warningCount > 2 ? 'danger' : emp.warningCount > 0 ? 'warning' : 'default'}>
-                {emp.warningCount} uyarı
-              </Badge>
             </div>
-          </Link>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
