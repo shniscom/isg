@@ -46,6 +46,7 @@ const correctionStatusEnum = pgEnum('correction_status', ['BEKLEMEDE', 'ONAYLAND
 const penaltySanctionEnum = pgEnum('penalty_sanction', ['PARA_CEZASI', 'UYARI', 'CALISMADAN_UZAKLASTIRMA', 'IS_AKDI_FESHI', 'DIGER']);
 const penaltyStatusEnum = pgEnum('penalty_status', ['BEKLEMEDE', 'ONAYLANDI', 'REDDEDILDI']);
 const extensionStatusEnum = pgEnum('extension_status', ['BEKLEMEDE', 'ONAYLANDI', 'REDDEDILDI']);
+const archiveStatusEnum = pgEnum('archive_status', ['OLUSTURULDU', 'SILINDI']);
 
 const users = pgTable('users', {
   id: text('id').primaryKey().$defaultFn(genId),
@@ -145,10 +146,13 @@ const userProjects = pgTable('user_projects', {
   // o firmaya özeldir (ör. "B taşeronunun İSG uzmanı"). Aynı kullanıcı aynı projede farklı
   // firma + görev kombinasyonlarına sahip olabilir.
   companyId: text('company_id').references(() => companies.id, { onDelete: 'cascade' }),
+  // Boş ise atama tüm bölgeleri kapsar. Doluysa atama yalnızca o bölgeye/bloğa özeldir
+  // (ör. "5. parselin İSG uzmanı"). Firma ile birlikte veya bağımsız kullanılabilir.
+  blockId: text('block_id').references(() => projectBlocks.id, { onDelete: 'cascade' }),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
-  uniqueIndex('user_projects_unique_idx').on(table.userId, table.projectId, table.roleId, table.companyId),
+  uniqueIndex('user_projects_unique_idx').on(table.userId, table.projectId, table.roleId, table.companyId, table.blockId),
 ]);
 
 const userPermissions = pgTable('user_permissions', {
@@ -383,6 +387,33 @@ const pushSubscriptions = pgTable('push_subscriptions', {
   index('push_subscriptions_user_idx').on(table.userId),
 ]);
 
+/**
+ * Aylık arşiv kayıtları: admin belirli bir proje + ay (ör. "2026-08") için tüm uygunsuzluk
+ * verisini (fotoğraflar dahil) bir zip dosyası olarak dışa aktardığında burada bir kayıt
+ * oluşturulur (OLUSTURULDU). Admin dosyayı kaydettiğini onaylayıp o ayın kayıtlarını
+ * sunucudan sildiğinde durum SILINDI'ye geçer. Aynı proje+ay için tekrar arşiv üretilirse
+ * (SILINDI olsa dahi) yeni bir zip indirilebilir, ama silme yalnızca hâlâ OLUSTURULDU
+ * durumundaki (yani sunucuda hâlâ var olan) kayıtlar için mümkündür.
+ */
+const archives = pgTable('archives', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  periodLabel: text('period_label').notNull(), // 'YYYY-MM'
+  recordCount: integer('record_count').notNull().default(0),
+  status: archiveStatusEnum('status').notNull().default('OLUSTURULDU'),
+  createdById: text('created_by_id').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  deletedById: text('deleted_by_id').references(() => users.id),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+}, (table) => [
+  uniqueIndex('archives_project_period_idx').on(table.projectId, table.periodLabel),
+]);
+const archivesRelations = relations(archives, ({ one }) => ({
+  project: one(projects, { fields: [archives.projectId], references: [projects.id] }),
+  createdBy: one(users, { fields: [archives.createdById], references: [users.id] }),
+  deletedBy: one(users, { fields: [archives.deletedById], references: [users.id] }),
+}));
+
 /** Sistem geneli basit ayarlar (ör. galeriden fotoğraf seçmeye izin verilsin mi). */
 const systemSettings = pgTable('system_settings', {
   key: text('key').primaryKey(),
@@ -459,6 +490,7 @@ const userProjectsRelations = relations(userProjects, ({ one }) => ({
   project: one(projects, { fields: [userProjects.projectId], references: [projects.id] }),
   role: one(roles, { fields: [userProjects.roleId], references: [roles.id] }),
   company: one(companies, { fields: [userProjects.companyId], references: [companies.id] }),
+  block: one(projectBlocks, { fields: [userProjects.blockId], references: [projectBlocks.id] }),
 }));
 
 const userPermissionsRelations = relations(userPermissions, ({ one }) => ({
@@ -556,6 +588,7 @@ module.exports = {
   penaltySanctionEnum,
   penaltyStatusEnum,
   extensionStatusEnum,
+  archiveStatusEnum,
   users,
   projects,
   projectBlocks,
@@ -579,6 +612,8 @@ module.exports = {
   pushSubscriptions,
   systemSettings,
   userInvites,
+  archives,
+  archivesRelations,
   usersRelations,
   projectsRelations,
   projectBlocksRelations,

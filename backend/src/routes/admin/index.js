@@ -13,5 +13,6 @@ router.use('/users', require('./users.routes'));
 router.use('/roles', require('./roles.routes'));
 router.use('/permissions', require('./permissions.routes'));
 router.use('/categories', require('./categories.routes'));
+router.use('/archives', require('./archives.routes'));
 
 module.exports = router;

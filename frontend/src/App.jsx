@@ -19,6 +19,7 @@ import { UserDetailPage } from './pages/admin/UserDetailPage';
 import { RolesPage } from './pages/admin/RolesPage';
 import { CategoriesPage } from './pages/admin/CategoriesPage';
 import { SettingsPage } from './pages/admin/SettingsPage';
+import { ArchivesPage } from './pages/admin/ArchivesPage';
 import { NonconformitiesListPage } from './pages/NonconformitiesListPage';
 import { NewNonconformityPage } from './pages/NewNonconformityPage';
 import { NonconformityDetailPage } from './pages/NonconformityDetailPage';
@@ -139,6 +140,14 @@ function AppRoutes() {
           element={
             <AdminRoute>
               <CategoriesPage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/admin/arsiv"
+          element={
+            <AdminRoute>
+              <ArchivesPage />
             </AdminRoute>
           }
         />

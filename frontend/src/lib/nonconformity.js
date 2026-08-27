@@ -49,6 +49,18 @@ export function formatDate(value) {
   return new Date(value).toLocaleDateString('tr-TR', { dateStyle: 'medium' });
 }
 
+/**
+ * Uygunsuzluk numarasının sonundaki 6 haneli proje-geneli sıra numarasını döner (ör.
+ * "2026-2026-SMS-001-000004" -> 4). Bu sayı projede o ana kadar açılmış toplam uygunsuzluk
+ * adedini temsil eder (silinen kayıtlar dahi bu sayacı geri almaz, gerçek bir "kaçıncı"
+ * bilgisidir). Ayrıştırılamazsa null döner.
+ */
+export function nonconformitySequenceNumber(number) {
+  if (!number) return null;
+  const match = number.match(/-(\d{6})$/);
+  return match ? parseInt(match[1], 10) : null;
+}
+
 export function remainingDaysLabel(dueDate, status) {
   if (status === 'KAPALI') return null;
   const diffMs = new Date(dueDate).getTime() - Date.now();

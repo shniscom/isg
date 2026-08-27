@@ -103,6 +103,8 @@ export function NewNonconformityPage() {
   const { user } = useAuth();
   const [refData, setRefData] = useState(null);
   const [users, setUsers] = useState(null);
+  // 'auto' = Sorumlu Firma ile aynı, 'all' = projedeki herkes, ya da belirli bir firma id'si.
+  const [assigneeFilter, setAssigneeFilter] = useState('auto');
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [photos, setPhotos] = useState([]);
@@ -155,13 +157,20 @@ export function NewNonconformityPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProjectId]);
 
-  // Atanabilir kişi listesi, seçilen sorumlu firmaya göre daraltılır: yalnızca o firmaya özel
-  // atanmış kişiler + proje genelinde (tüm firmalar kapsamında) atanmış kişiler listelenir.
-  // Böylece ilgisiz bir firmanın çalışanına yanlışlıkla atama yapılması önlenir.
+  // Atanabilir kişi listesi varsayılan olarak seçilen sorumlu firmaya göre daraltılır: yalnızca
+  // o firmaya özel atanmış kişiler + proje genelinde (tüm firmalar kapsamında) atanmış kişiler
+  // listelenir. "assigneeFilter" ile bu davranış geçersiz kılınabilir: 'auto' (sorumlu firma ile
+  // aynı), 'all' (projedeki herkes), ya da belirli bir firma id'si.
+  useEffect(() => {
+    setAssigneeFilter('auto');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.companyId]);
+
   useEffect(() => {
     if (!activeProjectId) return;
     const params = user?.isSystemAdmin ? { projectId: activeProjectId } : {};
-    if (form.companyId) params.companyId = form.companyId;
+    const effectiveCompanyId = assigneeFilter === 'auto' ? form.companyId : assigneeFilter === 'all' ? '' : assigneeFilter;
+    if (effectiveCompanyId) params.companyId = effectiveCompanyId;
     setUsers(null);
     apiClient
       .get('/nonconformities/assignable-users', { params })
@@ -169,13 +178,13 @@ export function NewNonconformityPage() {
         // Kişi kendisine uygunsuzluk atayamaz; kendi kaydını listeden çıkar.
         const filtered = data.users.filter((u) => u.userId !== user?.id);
         setUsers(filtered);
-        // Firma değişince artık listede olmayan seçimler otomatik kaldırılır.
+        // Filtre değişince artık listede olmayan seçimler otomatik kaldırılır.
         const validIds = new Set(filtered.map((u) => u.userId));
         setAssignedUserIds((prev) => prev.filter((id) => validIds.has(id)));
       })
       .catch((err) => setError(getErrorMessage(err)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProjectId, form.companyId]);
+  }, [activeProjectId, form.companyId, assigneeFilter]);
 
   // Sorumlu firma seçilince, o firmanın kayıtlı çalışanları listelenir (mükerrer kayıt önlemek için).
   useEffect(() => {
@@ -415,10 +424,24 @@ export function NewNonconformityPage() {
 
           <div>
             <span className="mb-1.5 block text-sm font-medium text-slate-700">Atanan Kişi(ler)</span>
+            <Select
+              label="Kimler listelensin?"
+              value={assigneeFilter}
+              onChange={(e) => setAssigneeFilter(e.target.value)}
+              className="mb-1.5"
+            >
+              <option value="auto">Sorumlu Firma + Genel</option>
+              <option value="all">Tüm Kullanıcılar</option>
+              {refData?.companies.map((c) => (
+                <option key={c.id} value={c.id}>
+                  Yalnızca: {c.name}
+                </option>
+              ))}
+            </Select>
             <p className="mb-1.5 text-xs text-slate-500">
-              {form.companyId
-                ? 'Yalnızca seçili sorumlu firmaya atanmış kişiler ve proje genelinde yetkili olanlar listelenir.'
-                : 'Önce sorumlu firmayı seçerseniz liste yalnızca o firmayla ilgili kişilere daralır.'}
+              {assigneeFilter === 'all'
+                ? 'Projedeki tüm yetkili kullanıcılar listeleniyor.'
+                : 'Yalnızca seçili sorumlu firmaya atanmış kişiler ve proje genelinde yetkili olanlar listelenir. Farklı bir kapsam görmek için yukarıdaki filtreyi kullanın.'}
             </p>
             {users && users.length === 0 && (
               <p className="text-sm text-slate-400">Bu kapsamda atanabilir kullanıcı yok (kendinize atama yapamazsınız).</p>
@@ -438,6 +461,8 @@ export function NewNonconformityPage() {
                   />
                   <span className="text-sm text-slate-800">
                     {u.fullName} — {u.roleName}
+                    {u.blockName ? ` — ${u.blockName}` : ''}
+                    {u.companyName ? ` — ${u.companyName}` : ''}
                   </span>
                 </label>
               ))}

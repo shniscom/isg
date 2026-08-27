@@ -15,6 +15,7 @@ const NAV_ITEMS = [
   { to: '/admin/kullanicilar', label: 'Kullanıcılar', icon: '👤', permission: 'kullanici_yonetme' },
   { to: '/admin/gorevler', label: 'Görevler', icon: '🎯', permission: 'kullanici_yonetme' },
   { to: '/admin/kategoriler', label: 'Kategoriler', icon: '🏷️', adminOnly: true },
+  { to: '/admin/arsiv', label: 'Arşiv', icon: '🗄️', adminOnly: true },
   { to: '/admin/ayarlar', label: 'Ayarlar', icon: '⚙️', adminOnly: true },
 ];
 

@@ -64,6 +64,20 @@
       "when": 1787664570884,
       "tag": "0008_employees_isg_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787818700389,
+      "tag": "0009_user_projects_block_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787820603347,
+      "tag": "0010_archives",
+      "breakpoints": true
     }
   ]
 }

@@ -23,6 +23,8 @@ export function UserDetailPage() {
   const [assignRoleId, setAssignRoleId] = useState('');
   const [assignCompanyIds, setAssignCompanyIds] = useState([]); // boş -> Tüm Proje (Ana Firma/Genel)
   const [projectCompanies, setProjectCompanies] = useState([]);
+  const [assignBlockId, setAssignBlockId] = useState(''); // boş -> Tüm Bölgeler
+  const [projectBlocks, setProjectBlocks] = useState([]);
   const [assignSubmitting, setAssignSubmitting] = useState(false);
   const [grantPermissionIds, setGrantPermissionIds] = useState([]);
   const [grantProjectId, setGrantProjectId] = useState('');
@@ -55,14 +57,20 @@ export function UserDetailPage() {
 
   useEffect(() => {
     setAssignCompanyIds([]);
+    setAssignBlockId('');
     if (!assignProjectId) {
       setProjectCompanies([]);
+      setProjectBlocks([]);
       return;
     }
     apiClient
       .get('/admin/companies', { params: { projectId: assignProjectId } })
       .then(({ data }) => setProjectCompanies(data.companies))
       .catch(() => setProjectCompanies([]));
+    apiClient
+      .get(`/admin/projects/${assignProjectId}/blocks`)
+      .then(({ data }) => setProjectBlocks(data.blocks))
+      .catch(() => setProjectBlocks([]));
   }, [assignProjectId]);
 
   function toggleAssignCompany(companyId) {
@@ -78,14 +86,17 @@ export function UserDetailPage() {
     setError(null);
     try {
       // Firma seçilmediyse tüm proje kapsamında (Ana Firma/Genel) tek atama yapılır;
-      // birden fazla firma seçildiyse her firma için ayrı bir atama oluşturulur.
+      // birden fazla firma seçildiyse her firma için ayrı bir atama oluşturulur. Seçilen bölge
+      // (varsa) bu toplu işlemdeki her atamaya aynı şekilde uygulanır.
       const companyIdsToAssign = assignCompanyIds.length > 0 ? assignCompanyIds : [null];
+      const blockId = assignBlockId || null;
       const results = await Promise.allSettled(
         companyIdsToAssign.map((companyId) =>
           apiClient.post(`/admin/users/${id}/projects`, {
             projectId: assignProjectId,
             roleId: assignRoleId,
             companyId,
+            blockId,
           })
         )
       );
@@ -98,6 +109,7 @@ export function UserDetailPage() {
       setAssignProjectId('');
       setAssignRoleId('');
       setAssignCompanyIds([]);
+      setAssignBlockId('');
       await load();
     } finally {
       setAssignSubmitting(false);
@@ -297,6 +309,7 @@ export function UserDetailPage() {
                 <div className="text-sm text-slate-500">
                   {a.roleName}
                   {a.companyName ? ` · ${a.companyName}` : ' · Tüm Proje (Ana Firma/Genel)'}
+                  {a.blockName ? ` · ${a.blockName}` : ' · Tüm Bölgeler'}
                 </div>
               </div>
               <Button variant="ghost" onClick={() => handleRemoveAssignment(a.id)}>
@@ -355,6 +368,21 @@ export function UserDetailPage() {
                 Birden fazla firma seçilirse, her firma için ayrı bir atama oluşturulur.
               </p>
             </div>
+          )}
+
+          {assignProjectId && projectBlocks.length > 0 && (
+            <Select
+              label="Bölge (boş bırakılırsa tüm bölgeler kapsamında atanır)"
+              value={assignBlockId}
+              onChange={(e) => setAssignBlockId(e.target.value)}
+            >
+              <option value="">Tüm Bölgeler</option>
+              {projectBlocks.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </Select>
           )}
 
           <Button type="submit" disabled={!assignProjectId || !assignRoleId || assignSubmitting}>
