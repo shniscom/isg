@@ -78,6 +78,12 @@ const users = pgTable('users', {
   isSystemAdmin: boolean('is_system_admin').notNull().default(false),
   isActive: boolean('is_active').notNull().default(true),
   mustChangePassword: boolean('must_change_password').notNull().default(true),
+  // Görünüm tercihleri: her kullanıcı kendi hesabında saklanır, cihaz değiştirince de korunur.
+  // themeKey -> frontend'deki tema kataloğundaki bir anahtar (ör. 'klasik', 'kirmizi'); geçersiz/
+  // eski bir anahtar gelirse frontend varsayılana düşer, bu yüzden burada enum kullanılmadı.
+  themeKey: text('theme_key').notNull().default('klasik'),
+  colorMode: text('color_mode').notNull().default('system'), // 'light' | 'dark' | 'system'
+  buttonDensity: text('button_density').notNull().default('compact'), // 'compact' | 'comfortable'
   lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

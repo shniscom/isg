@@ -15,6 +15,11 @@ const { logAudit } = require('../utils/audit');
 
 const router = express.Router();
 
+/** Görünüm tercihlerini (tema/mod/yoğunluk) kullanıcı nesnesine tutarlı biçimde ekler. */
+function appearanceFields(user) {
+  return { themeKey: user.themeKey, colorMode: user.colorMode, buttonDensity: user.buttonDensity };
+}
+
 // Kaba kuvvet saldırılarına karşı giriş denemelerini sınırla.
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -87,7 +92,7 @@ router.post(
         accessToken,
         rememberMe,
         mustChangePassword: user.mustChangePassword,
-        user: { id: user.id, fullName: user.fullName, username: user.username },
+        user: { id: user.id, fullName: user.fullName, username: user.username, ...appearanceFields(user) },
       });
     }
 
@@ -186,7 +191,7 @@ router.post(
       accessToken,
       rememberMe: !!decoded.rememberMe,
       mustChangePassword: user.mustChangePassword,
-      user: { id: user.id, fullName: user.fullName, username: user.username },
+      user: { id: user.id, fullName: user.fullName, username: user.username, ...appearanceFields(user) },
       context: { projectId, roleId, permissions: permissionKeys },
     });
   })
@@ -208,11 +213,39 @@ router.get(
         email: user.email,
         isSystemAdmin: user.isSystemAdmin,
         mustChangePassword: user.mustChangePassword,
+        ...appearanceFields(user),
       },
       context: req.user.isSystemAdmin
         ? null
         : { projectId: req.user.projectId, roleId: req.user.roleId, permissions: req.user.permissions },
     });
+  })
+);
+
+const THEME_KEYS = ['klasik', 'kirmizi', 'lacivert-turuncu', 'turkuaz', 'mor'];
+const COLOR_MODES = ['light', 'dark', 'system'];
+const BUTTON_DENSITIES = ['compact', 'comfortable'];
+
+const appearanceSchema = z.object({
+  themeKey: z.enum(THEME_KEYS).optional(),
+  colorMode: z.enum(COLOR_MODES).optional(),
+  buttonDensity: z.enum(BUTTON_DENSITIES).optional(),
+});
+
+// Görünüm tercihi tamamen kişiseldir (kendi hesabı dışında hiçbir etkisi yok), bu yüzden
+// herhangi bir özel yetki gerekmez - yalnızca geçerli bir oturum yeterlidir.
+router.patch(
+  '/me/appearance',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const parsed = appearanceSchema.safeParse(req.body);
+    if (!parsed.success) throw ApiError.badRequest('Geçersiz görünüm tercihi.', parsed.error.flatten());
+    if (Object.keys(parsed.data).length === 0) throw ApiError.badRequest('Güncellenecek bir alan gönderilmedi.');
+
+    const [updated] = await db.update(users).set(parsed.data).where(eq(users.id, req.user.sub)).returning();
+    if (!updated) throw ApiError.notFound('Kullanıcı bulunamadı.');
+
+    res.json({ ...appearanceFields(updated) });
   })
 );
 

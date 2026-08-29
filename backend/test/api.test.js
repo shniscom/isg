@@ -2358,3 +2358,48 @@ test('kaza_bildirimi yetkisi: firma_yonetme olmadan kaza/ramak kala girme + gör
   const adminDelete = await api('DELETE', `/admin/incidents/${incidentId}`, { token: adminToken });
   assert.equal(adminDelete.status, 200);
 });
+
+test('görünüm tercihleri: varsayılan değerler, PATCH ile güncelleme, geçersiz değer reddi, select-context yanıtına yansıması', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Görünüm Test Projesi', code: 'TST-GORUNUM-001' } });
+  const projectId = proj.body.project.id;
+  const rolesRes = await api('GET', '/admin/roles', { token: adminToken });
+  const formenRoleId = rolesRes.body.roles.find((r) => r.name === 'Formen').id;
+
+  const userCreate = await api('POST', '/admin/users', { token: adminToken, body: { fullName: 'Görünüm Kullanıcısı', username: 'gorunum.testi' } });
+  const userId = userCreate.body.user.id;
+  await api('POST', `/admin/users/${userId}/projects`, { token: adminToken, body: { projectId, roleId: formenRoleId } });
+
+  const login = await api('POST', '/auth/login', { body: { username: 'gorunum.testi', password: userCreate.body.tempPassword } });
+  const select = await api('POST', '/auth/select-context', { body: { contextToken: login.body.contextToken, projectId, roleId: formenRoleId } });
+  const token = select.body.accessToken;
+
+  // Varsayılan değerler hem select-context yanıtında hem /auth/me üzerinde görünmeli.
+  assert.equal(select.body.user.themeKey, 'klasik');
+  assert.equal(select.body.user.colorMode, 'system');
+  assert.equal(select.body.user.buttonDensity, 'compact');
+
+  const me = await api('GET', '/auth/me', { token });
+  assert.equal(me.body.user.themeKey, 'klasik');
+  assert.equal(me.body.user.colorMode, 'system');
+  assert.equal(me.body.user.buttonDensity, 'compact');
+
+  // Geçersiz değer reddedilir.
+  const invalid = await api('PATCH', '/auth/me/appearance', { token, body: { themeKey: 'olmayan-tema' } });
+  assert.equal(invalid.status, 400);
+
+  // Geçerli güncelleme kabul edilir ve kalıcı olur.
+  const update = await api('PATCH', '/auth/me/appearance', { token, body: { themeKey: 'kirmizi', colorMode: 'dark', buttonDensity: 'comfortable' } });
+  assert.equal(update.status, 200);
+  assert.equal(update.body.themeKey, 'kirmizi');
+  assert.equal(update.body.colorMode, 'dark');
+  assert.equal(update.body.buttonDensity, 'comfortable');
+
+  const meAfter = await api('GET', '/auth/me', { token });
+  assert.equal(meAfter.body.user.themeKey, 'kirmizi');
+  assert.equal(meAfter.body.user.colorMode, 'dark');
+  assert.equal(meAfter.body.user.buttonDensity, 'comfortable');
+
+  // Başka bir kullanıcının görünüm tercihini etkilemez (tamamen kişisel).
+  const adminMe = await api('GET', '/auth/me', { token: adminToken });
+  assert.equal(adminMe.body.user.themeKey, 'klasik');
+});

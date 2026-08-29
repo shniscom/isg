@@ -85,6 +85,13 @@
       "when": 1787999445114,
       "tag": "0011_company_safety_expansion",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788010602904,
+      "tag": "0012_user_appearance_prefs",
+      "breakpoints": true
     }
   ]
 }
