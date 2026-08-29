@@ -1,8 +1,8 @@
 const crypto = require('crypto');
-const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
-const ALLOWED_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
+const ALLOWED_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf']);
 
 const UPLOAD_URL_TTL_SECONDS = 5 * 60; // yükleme linki 5 dakika geçerli
 const VIEW_URL_TTL_SECONDS = 15 * 60; // görüntüleme linki 15 dakika geçerli
@@ -74,4 +74,28 @@ async function createViewUrl(key) {
   return getSignedUrl(getClient(), command, { expiresIn: VIEW_URL_TTL_SECONDS });
 }
 
-module.exports = { createUploadUrl, createViewUrl, ALLOWED_CONTENT_TYPES };
+/**
+ * Verilen object key için gerçek dosya baytlarını (okunabilir stream olarak) döner.
+ * Arşiv zip'i oluşturulurken fotoğrafları sunucu tarafında R2'den çekmek için kullanılır.
+ * @param {string} key
+ * @returns {Promise<import('stream').Readable>}
+ */
+async function getObjectStream(key) {
+  const { bucket } = getConfig();
+  const command = new GetObjectCommand({ Bucket: bucket, Key: key });
+  const response = await getClient().send(command);
+  return response.Body;
+}
+
+/**
+ * Verilen object key'i R2'den kalıcı olarak siler. Arşiv onaylı silme akışında,
+ * arşivlenip dışa aktarılmış fotoğrafları sunucudan temizlemek için kullanılır.
+ * @param {string} key
+ */
+async function deleteObject(key) {
+  const { bucket } = getConfig();
+  const command = new DeleteObjectCommand({ Bucket: bucket, Key: key });
+  await getClient().send(command);
+}
+
+module.exports = { createUploadUrl, createViewUrl, getObjectStream, deleteObject, ALLOWED_CONTENT_TYPES };

@@ -2,7 +2,7 @@ const express = require('express');
 const { z } = require('zod');
 const { eq, and, or, count, ilike, inArray, desc, asc } = require('drizzle-orm');
 const { db } = require('../db/client');
-const { employees, nonconformities, companies, userProjects } = require('../db/schema');
+const { employees, nonconformities, companies, userProjects, incidents } = require('../db/schema');
 const { requireAuth } = require('../middleware/auth');
 const { requireSystemAdmin } = require('../middleware/permission');
 const { asyncHandler } = require('../utils/asyncHandler');
@@ -136,6 +136,8 @@ const EMPLOYEE_LIST_COLUMNS = {
   ek2Note: employees.ek2Note,
   healthAuthoritySignatureNote: employees.healthAuthoritySignatureNote,
   isgRole: employees.isgRole,
+  mykCertificateNo: employees.mykCertificateNo,
+  mykCertificateDate: employees.mykCertificateDate,
   startDate: employees.startDate,
   endDate: employees.endDate,
   isActive: employees.isActive,
@@ -194,7 +196,18 @@ router.get(
       .groupBy(nonconformities.employeeId);
     const warningByEmployee = new Map(warningCounts.filter((r) => r.employeeId).map((r) => [r.employeeId, r.value]));
 
-    const rowsWithCounts = rows.map((r) => ({ ...r, warningCount: warningByEmployee.get(r.id) || 0 }));
+    const incidentCounts = await db
+      .select({ employeeId: incidents.employeeId, value: count() })
+      .from(incidents)
+      .where(inArray(incidents.employeeId, rows.map((r) => r.id)))
+      .groupBy(incidents.employeeId);
+    const incidentByEmployee = new Map(incidentCounts.filter((r) => r.employeeId).map((r) => [r.employeeId, r.value]));
+
+    const rowsWithCounts = rows.map((r) => ({
+      ...r,
+      warningCount: warningByEmployee.get(r.id) || 0,
+      incidentCount: incidentByEmployee.get(r.id) || 0,
+    }));
 
     if (!usePagination) {
       res.json({ employees: rowsWithCounts });
@@ -242,6 +255,8 @@ const createSchema = z.object({
   ek2Note: z.string().optional().nullable().or(z.literal('')),
   healthAuthoritySignatureNote: z.string().optional().nullable().or(z.literal('')),
   isgRole: z.string().optional().nullable().or(z.literal('')),
+  mykCertificateNo: z.string().optional().nullable().or(z.literal('')),
+  mykCertificateDate: z.string().optional().nullable().or(z.literal('')),
   startDate: z.string().optional().nullable().or(z.literal('')),
   endDate: z.string().optional().nullable().or(z.literal('')),
 });
@@ -270,6 +285,8 @@ router.post(
         ek2Note: parsed.data.ek2Note || null,
         healthAuthoritySignatureNote: parsed.data.healthAuthoritySignatureNote || null,
         isgRole: parsed.data.isgRole || null,
+        mykCertificateNo: parsed.data.mykCertificateNo || null,
+        mykCertificateDate: toDateOrNull(parsed.data.mykCertificateDate),
         startDate: toDateOrNull(parsed.data.startDate),
         endDate: toDateOrNull(endDate),
         isActive: !endDate,
@@ -305,6 +322,8 @@ const updateSchema = z.object({
   ek2Note: z.string().optional().nullable().or(z.literal('')),
   healthAuthoritySignatureNote: z.string().optional().nullable().or(z.literal('')),
   isgRole: z.string().optional().nullable().or(z.literal('')),
+  mykCertificateNo: z.string().optional().nullable().or(z.literal('')),
+  mykCertificateDate: z.string().optional().nullable().or(z.literal('')),
   startDate: z.string().optional().nullable().or(z.literal('')),
   endDate: z.string().optional().nullable().or(z.literal('')),
 });
@@ -336,6 +355,8 @@ router.patch(
     if (parsed.data.ek2Note !== undefined) values.ek2Note = parsed.data.ek2Note || null;
     if (parsed.data.healthAuthoritySignatureNote !== undefined) values.healthAuthoritySignatureNote = parsed.data.healthAuthoritySignatureNote || null;
     if (parsed.data.isgRole !== undefined) values.isgRole = parsed.data.isgRole || null;
+    if (parsed.data.mykCertificateNo !== undefined) values.mykCertificateNo = parsed.data.mykCertificateNo || null;
+    if (parsed.data.mykCertificateDate !== undefined) values.mykCertificateDate = toDateOrNull(parsed.data.mykCertificateDate);
     if (parsed.data.startDate !== undefined) values.startDate = toDateOrNull(parsed.data.startDate);
     if (parsed.data.endDate !== undefined) {
       const endDateRaw = parsed.data.endDate || null;

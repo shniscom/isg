@@ -138,8 +138,9 @@ router.get(
   asyncHandler(async (req, res) => {
     const projectId = resolveProjectId(req, req.query.projectId);
     // ?companyId= verilirse yalnızca o firmaya özel atanmış kişiler + proje genelinde (tüm
-    // firmalar kapsamında) atanmış kişiler listelenir. Böylece bir uygunsuzluk belirli bir
-    // firmaya açıldığında, o firmayla ilgisi olmayan kişiler atanabilir listede görünmez.
+    // firmalar kapsamında) atanmış kişiler listelenir. companyId hiç gönderilmezse projedeki
+    // TÜM atanmış kişiler (herhangi bir firma kapsamı) listelenir - "tüm kullanıcıları göster"
+    // filtresi için kullanılır.
     const companyId = req.query.companyId || null;
 
     const conditions = [eq(userProjects.projectId, projectId), eq(userProjects.isActive, true), eq(users.isActive, true)];
@@ -153,25 +154,39 @@ router.get(
         fullName: users.fullName,
         roleName: roles.name,
         companyId: userProjects.companyId,
+        companyName: companies.name,
+        blockId: userProjects.blockId,
+        blockName: projectBlocks.name,
       })
       .from(userProjects)
       .innerJoin(users, eq(userProjects.userId, users.id))
       .innerJoin(roles, eq(userProjects.roleId, roles.id))
+      .leftJoin(companies, eq(userProjects.companyId, companies.id))
+      .leftJoin(projectBlocks, eq(userProjects.blockId, projectBlocks.id))
       .where(and(...conditions));
 
     // Aynı kullanıcının bu projede birden fazla ataması olabilir (ör. hem genel hem de belirli
-    // bir firmaya özel). Listede tek satır göstermek için tekilleştirilir; firma bazlı eşleşme
-    // varsa o tercih edilir (daha net bir rol/kapsam ifade eder).
+    // bir firmaya/bölgeye özel). Listede tek satır göstermek için tekilleştirilir; istenen
+    // firmaya özel eşleşme varsa o tercih edilir (daha net bir rol/kapsam/bölge ifade eder).
     const byUser = new Map();
     for (const row of rows) {
-      const isCompanySpecific = row.companyId !== null;
+      const isRequestedCompanyMatch = companyId ? row.companyId === companyId : row.companyId !== null;
       const existing = byUser.get(row.userId);
-      if (!existing || (isCompanySpecific && !existing.isCompanySpecific)) {
-        byUser.set(row.userId, { userId: row.userId, fullName: row.fullName, roleName: row.roleName, isCompanySpecific });
+      if (!existing || (isRequestedCompanyMatch && !existing._match)) {
+        byUser.set(row.userId, {
+          userId: row.userId,
+          fullName: row.fullName,
+          roleName: row.roleName,
+          companyId: row.companyId,
+          companyName: row.companyName,
+          blockId: row.blockId,
+          blockName: row.blockName,
+          _match: isRequestedCompanyMatch,
+        });
       }
     }
 
-    const result = [...byUser.values()].map(({ isCompanySpecific, ...rest }) => rest);
+    const result = [...byUser.values()].map(({ _match, ...rest }) => rest);
     res.json({ users: result });
   })
 );

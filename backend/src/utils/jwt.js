@@ -2,6 +2,9 @@ const jwt = require('jsonwebtoken');
 
 const CONTEXT_TOKEN_TTL = '10m';
 const ACCESS_TOKEN_TTL = '12h';
+// "Beni Hatırla" işaretlenirse: uygulama tamamen kapatılıp yeniden açılsa bile oturum
+// açık kalsın diye çok daha uzun ömürlü bir token verilir.
+const ACCESS_TOKEN_TTL_REMEMBER = '30d';
 
 function getSecret() {
   const secret = process.env.JWT_SECRET;
@@ -15,8 +18,9 @@ function signContextToken(payload) {
   return jwt.sign({ ...payload, type: 'context' }, getSecret(), { expiresIn: CONTEXT_TOKEN_TTL });
 }
 
-function signAccessToken(payload) {
-  return jwt.sign({ ...payload, type: 'access' }, getSecret(), { expiresIn: ACCESS_TOKEN_TTL });
+function signAccessToken(payload, { rememberMe = false } = {}) {
+  const expiresIn = rememberMe ? ACCESS_TOKEN_TTL_REMEMBER : ACCESS_TOKEN_TTL;
+  return jwt.sign({ ...payload, type: 'access' }, getSecret(), { expiresIn });
 }
 
 function verifyToken(token) {
