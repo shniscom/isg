@@ -18,6 +18,7 @@ export const PERMISSION_DESCRIPTIONS = {
   kullanici_yonetme: 'Kullanıcı oluşturma, projeye/göreve atama ve yetkilendirme yapabilir.',
   firma_yonetme: 'Ana firma, taşeron ve tedarikçi tanımlarını yönetebilir.',
   proje_yonetme: 'Proje ve proje içi blok/bölge tanımlarını yönetebilir.',
+  kaza_bildirimi: 'Firmalara kaza / ramak kala kaydı girebilir ve girilen kayıtları görüntüleyebilir (düzenleme/silme için Firma Yönetme yetkisi gerekir).',
 };
 
 // Yetkileri "Yetkilerim" sayfasında düzenli göstermek için kategori grupları.
@@ -49,6 +50,11 @@ export const PERMISSION_CATEGORIES = [
     title: 'Saha Yaptırımları',
     icon: '🛑',
     keys: ['calisma_durdurma', 'cezai_islem'],
+  },
+  {
+    title: 'Kaza / Ramak Kala',
+    icon: '🚑',
+    keys: ['kaza_bildirimi'],
   },
   {
     title: 'Raporlama',

@@ -24,6 +24,7 @@ import { ArchivesPage } from './pages/admin/ArchivesPage';
 import { NonconformitiesListPage } from './pages/NonconformitiesListPage';
 import { NewNonconformityPage } from './pages/NewNonconformityPage';
 import { NonconformityDetailPage } from './pages/NonconformityDetailPage';
+import { NewIncidentPage } from './pages/NewIncidentPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { PenaltiesPage } from './pages/PenaltiesPage';
 import { EmployeesPage } from './pages/EmployeesPage';
@@ -83,6 +84,7 @@ function AppRoutes() {
         <Route path="/uygunsuzluklar" element={<NonconformitiesListPage />} />
         <Route path="/uygunsuzluklar/yeni" element={<NewNonconformityPage />} />
         <Route path="/uygunsuzluklar/:id" element={<NonconformityDetailPage />} />
+        <Route path="/kaza-bildir" element={<NewIncidentPage />} />
         <Route path="/raporlar" element={<ReportsPage />} />
         <Route path="/cezalar" element={<PenaltiesPage />} />
         <Route path="/calisanlar" element={<EmployeesPage />} />

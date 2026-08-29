@@ -92,11 +92,18 @@ export function NonconformitiesListPage() {
     <div className="mx-auto max-w-4xl space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold text-slate-800">Uygunsuzluklar</h1>
-        {(hasPermission('uygunsuzluk_acma') || user?.isSystemAdmin) && (
-          <Link to="/uygunsuzluklar/yeni">
-            <Button>+ Yeni Uygunsuzluk</Button>
-          </Link>
-        )}
+        <div className="flex flex-wrap gap-2">
+          {(hasPermission('uygunsuzluk_acma') || user?.isSystemAdmin) && (
+            <Link to="/uygunsuzluklar/yeni">
+              <Button>+ Yeni Uygunsuzluk</Button>
+            </Link>
+          )}
+          {(hasPermission('kaza_bildirimi') || hasPermission('firma_yonetme') || user?.isSystemAdmin) && (
+            <Link to="/kaza-bildir">
+              <Button variant="secondary">+ Kaza / Ramak Kala Bildir</Button>
+            </Link>
+          )}
+        </div>
       </div>
 
       {user?.isSystemAdmin && adminProjects && (
