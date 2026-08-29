@@ -60,6 +60,19 @@ export function ProfilePage() {
         )}
       </Card>
 
+      <Link to="/gorunum">
+        <Card className="flex items-center justify-between transition hover:border-brand-300 hover:shadow-md">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">🎨</span>
+            <div>
+              <div className="font-semibold text-slate-800">Görünüm</div>
+              <div className="text-xs text-slate-500">Tema, karanlık/aydınlık mod ve buton boyutunu seçin</div>
+            </div>
+          </div>
+          <span className="text-slate-400">›</span>
+        </Card>
+      </Link>
+
       <Link to="/yetkilerim">
         <Card className="flex items-center justify-between transition hover:border-brand-300 hover:shadow-md">
           <div className="flex items-center gap-3">

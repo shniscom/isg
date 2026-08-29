@@ -8,6 +8,30 @@
     <meta name="theme-color" content="#1E3A8A" />
     <meta name="description" content="Yerel Uygunsuzluk Açma-Kapama ve İSG Takip Programı" />
     <title>İSG Takip Sistemi</title>
+    <!--
+      Sayfa boyanmadan ÖNCE, önbellekteki (varsa) tema/mod/yoğunluk tercihini <html> öğesine
+      uygular. Bu olmadan sayfa önce varsayılan temayla çizilip bir an sonra kullanıcının
+      gerçek temasına "zıplardı" (flash of wrong theme). Kaynak-doğrusu tercih src/context/
+      ThemeContext.jsx'te; burada yalnızca aynı localStorage anahtarı senkron okunur.
+    -->
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem('isg_takip_appearance_v1');
+          var prefs = raw ? JSON.parse(raw) : {};
+          var themeKey = prefs.themeKey || 'klasik';
+          var colorMode = prefs.colorMode || 'system';
+          var density = prefs.buttonDensity || 'compact';
+          var dark = colorMode === 'dark' || (colorMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          var root = document.documentElement;
+          root.setAttribute('data-theme', themeKey);
+          root.setAttribute('data-density', density);
+          if (dark) root.classList.add('dark');
+        } catch (e) {
+          /* yok say */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

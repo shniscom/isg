@@ -1,26 +1,192 @@
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------------------
+ * TEMA ALTYAPISI
+ * ---------------------------------------------------------------------------
+ * "brand" renk skalası ve nötr yüzey/metin skalası ("surface", slate paletinin
+ * üzerine yazılır) çalışma zamanında değişebilen CSS değişkenlerine bağlanır.
+ * Böylece Button/Card/Input gibi paylaşılan bileşenler ve onları kullanan tüm
+ * sayfalar HİÇBİR JS/JSX değişikliği gerekmeden tema/gece-gündüz moduna göre
+ * otomatik olarak renk değiştirir - yalnızca <html> öğesindeki data-theme ve
+ * "dark" class'ı değişir (bkz. src/context/ThemeContext.jsx).
+ *
+ * text-white / bg-white (örn. renkli bir butonun üzerindeki beyaz yazı, giriş
+ * ekranındaki yarı saydam rozet) BİLEREK buraya dahil edilmedi; bunlar her
+ * zaman gerçek beyaz kalmalı. Kart/sayfa yüzeyi olarak kullanılan eski
+ * bg-white sınıfları yerine ayrı bir "surface" rengi (bg-surface) tanımlanıp
+ * ilgili yerlerde kullanılıyor.
+ * --------------------------------------------------------------------------- */
 @theme {
-  --color-brand-50: #eff6ff;
-  --color-brand-100: #dbeafe;
-  --color-brand-200: #bfdbfe;
-  --color-brand-500: #3b82f6;
-  --color-brand-600: #2563eb;
-  --color-brand-700: #1d4ed8;
-  --color-brand-800: #1e3a8a;
-  --color-brand-900: #1e2a5e;
+  --color-brand-50: var(--brand-50);
+  --color-brand-100: var(--brand-100);
+  --color-brand-200: var(--brand-200);
+  --color-brand-300: var(--brand-300);
+  --color-brand-400: var(--brand-400);
+  --color-brand-500: var(--brand-500);
+  --color-brand-600: var(--brand-600);
+  --color-brand-700: var(--brand-700);
+  --color-brand-800: var(--brand-800);
+  --color-brand-900: var(--brand-900);
+
+  --color-surface: var(--surface-0);
+
+  --color-slate-50: var(--surface-50);
+  --color-slate-100: var(--surface-100);
+  --color-slate-200: var(--surface-200);
+  --color-slate-300: var(--surface-300);
+  --color-slate-400: var(--surface-400);
+  --color-slate-500: var(--surface-500);
+  --color-slate-600: var(--surface-600);
+  --color-slate-700: var(--surface-700);
+  --color-slate-800: var(--surface-800);
+  --color-slate-900: var(--surface-900);
 }
+
+/* Varsayılan (klasik mavi tema + açık mod) - mevcut uygulamanın önceki
+   sabit renkleriyle birebir aynıdır, bu yüzden hiçbir tema seçilmemiş bir
+   kullanıcı için görsel hiçbir şey değişmez. */
+:root {
+  --brand-50: #eff6ff;
+  --brand-100: #dbeafe;
+  --brand-200: #bfdbfe;
+  --brand-300: #93c5fd;
+  --brand-400: #60a5fa;
+  --brand-500: #3b82f6;
+  --brand-600: #2563eb;
+  --brand-700: #1d4ed8;
+  --brand-800: #1e3a8a;
+  --brand-900: #1e2a5e;
+
+  --surface-0: #ffffff;
+  --surface-50: #f8fafc;
+  --surface-100: #f1f5f9;
+  --surface-200: #e2e8f0;
+  --surface-300: #cbd5e1;
+  --surface-400: #94a3b8;
+  --surface-500: #64748b;
+  --surface-600: #475569;
+  --surface-700: #334155;
+  --surface-800: #1e293b;
+  --surface-900: #0f172a;
+
+  /* Buton yoğunluğu (Görünüm sayfasından değiştirilebilir): "compact" varsayılandır. */
+  --btn-py: 0.625rem;
+  --btn-px: 1.125rem;
+  --btn-min-h: 40px;
+  --btn-radius: 0.75rem;
+  --field-py: 0.625rem;
+  --field-px: 0.875rem;
+  --card-p: 1.125rem;
+  --card-radius: 1rem;
+}
+
+html[data-density='comfortable'] {
+  --btn-py: 0.875rem;
+  --btn-px: 1.25rem;
+  --btn-min-h: 48px;
+  --field-py: 0.75rem;
+  --field-px: 1rem;
+  --card-p: 1.25rem;
+}
+
+/* Koyu mod: yalnızca nötr yüzey/metin skalası değişir, marka rengi aynı kalır
+   (temanın kendi rengi hem açık hem koyu modda kullanılabilir olacak şekilde
+   seçildi). Kart, sayfadan biraz daha açık tutularak (surface-0 > surface-50)
+   klasik "yükselti" hissi korunur. */
+html.dark {
+  --surface-0: #1b2332;
+  --surface-50: #0f1420;
+  --surface-100: #1a2130;
+  --surface-200: #2a3346;
+  --surface-300: #3c4759;
+  --surface-400: #64748b;
+  --surface-500: #98a7bb;
+  --surface-600: #b7c1d1;
+  --surface-700: #cdd5e0;
+  --surface-800: #f1f5f9;
+  --surface-900: #ffffff;
+}
+
+/* ---- Renk temaları: yalnızca marka (brand) skalasını değiştirir ---- */
+
+html[data-theme='kirmizi'] {
+  --brand-50: #fef2f2;
+  --brand-100: #fee2e2;
+  --brand-200: #fecaca;
+  --brand-300: #fca5a5;
+  --brand-400: #f87171;
+  --brand-500: #ef4444;
+  --brand-600: #dc2626;
+  --brand-700: #b91c1c;
+  --brand-800: #991b1b;
+  --brand-900: #7f1d1d;
+}
+
+html[data-theme='lacivert-turuncu'] {
+  --brand-50: #fff7ed;
+  --brand-100: #ffedd5;
+  --brand-200: #fed7aa;
+  --brand-300: #fdba74;
+  --brand-400: #fb923c;
+  --brand-500: #f97316;
+  --brand-600: #ea580c;
+  --brand-700: #c2410c;
+  --brand-800: #9a3412;
+  --brand-900: #7c2d12;
+}
+
+html[data-theme='turkuaz'] {
+  --brand-50: #f0fdfa;
+  --brand-100: #ccfbf1;
+  --brand-200: #99f6e4;
+  --brand-300: #5eead4;
+  --brand-400: #2dd4bf;
+  --brand-500: #14b8a6;
+  --brand-600: #0d9488;
+  --brand-700: #0f766e;
+  --brand-800: #115e59;
+  --brand-900: #134e4a;
+}
+
+html[data-theme='mor'] {
+  --brand-50: #f5f3ff;
+  --brand-100: #ede9fe;
+  --brand-200: #ddd6fe;
+  --brand-300: #c4b5fd;
+  --brand-400: #a78bfa;
+  --brand-500: #8b5cf6;
+  --brand-600: #7c3aed;
+  --brand-700: #6d28d9;
+  --brand-800: #5b21b6;
+  --brand-900: #4c1d95;
+}
+
+/* "lacivert-turuncu" teması koyu modda en özgün haline kavuşur (koyu lacivert
+   zemin + turuncu vurgu, referans görsellerdeki fintech temasına en yakın
+   kombinasyon budur); bu yüzden bu temayı seçen kullanıcı koyu modu da
+   denemeye teşvik edilir (Görünüm sayfasında not olarak belirtilir). */
 
 html, body, #root {
   height: 100%;
 }
 
 body {
+  background-color: var(--surface-50);
+  color: var(--surface-800);
   -webkit-tap-highlight-color: transparent;
   overflow-x: hidden;
+  transition: background-color 0.15s ease;
 }
 
-/* Saha kullanımına uygun büyük dokunma alanları */
-button, a, input, select, textarea {
+/* Saha kullanımına uygun büyük dokunma alanları. Not: input/select/textarea
+   BİLEREK 16px'te sabit tutulur - iOS Safari, odaklanılan bir form alanının
+   font boyutu 16px'in altındaysa sayfayı otomatik yakınlaştırır; bu saha
+   kullanımında ciddi bir kullanılabilirlik sorunu yaratır. Yalnızca buton ve
+   bağlantı metni yoğunluk ayarına göre biraz küçülebilir. */
+input, select, textarea {
   font-size: 16px;
+}
+
+button, a {
+  font-size: 15px;
 }

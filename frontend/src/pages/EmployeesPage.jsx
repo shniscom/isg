@@ -271,7 +271,7 @@ export function EmployeesPage() {
               key={c.id}
               type="button"
               onClick={() => setSelectedCompany({ id: c.id, name: c.name })}
-              className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white p-3.5 text-left transition hover:border-brand-300 active:scale-[0.99]"
+              className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-surface p-3.5 text-left transition hover:border-brand-300 active:scale-[0.99]"
             >
               <div>
                 <div className="font-medium text-slate-800">{c.name}</div>
@@ -484,7 +484,7 @@ export function EmployeesPage() {
           const trainingChip = trainingStatusChip(emp);
           const medicalChip = medicalExamStatusChip(emp);
           return (
-            <div key={emp.id} className="rounded-xl border border-slate-200 bg-white p-3 transition hover:border-brand-300">
+            <div key={emp.id} className="rounded-xl border border-slate-200 bg-surface p-3 transition hover:border-brand-300">
               <div className="flex items-start gap-2">
                 {user?.isSystemAdmin && (
                   <input

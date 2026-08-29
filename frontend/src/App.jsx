@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ThemeProvider } from './context/ThemeContext';
 import { ProtectedRoute, PermissionRoute, AdminRoute } from './components/ProtectedRoute';
 import { Layout } from './components/Layout';
 import { FullScreenLoader } from './components/ui';
@@ -11,6 +12,7 @@ import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { PermissionsPage } from './pages/PermissionsPage';
+import { AppearancePage } from './pages/AppearancePage';
 import { ProjectsPage } from './pages/admin/ProjectsPage';
 import { ProjectDetailPage } from './pages/admin/ProjectDetailPage';
 import { CompaniesPage } from './pages/admin/CompaniesPage';
@@ -81,6 +83,7 @@ function AppRoutes() {
         <Route path="/" element={<DashboardPage />} />
         <Route path="/profil" element={<ProfilePage />} />
         <Route path="/yetkilerim" element={<PermissionsPage />} />
+        <Route path="/gorunum" element={<AppearancePage />} />
         <Route path="/uygunsuzluklar" element={<NonconformitiesListPage />} />
         <Route path="/uygunsuzluklar/yeni" element={<NewNonconformityPage />} />
         <Route path="/uygunsuzluklar/:id" element={<NonconformityDetailPage />} />
@@ -181,7 +184,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppRoutes />
+        <ThemeProvider>
+          <AppRoutes />
+        </ThemeProvider>
       </AuthProvider>
     </BrowserRouter>
   );

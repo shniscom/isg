@@ -1,10 +1,11 @@
 import { useState } from 'react';
 
 export function Button({ children, variant = 'primary', className = '', ...props }) {
-  const base = 'inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3.5 font-semibold text-base transition active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none min-h-[48px]';
+  const base =
+    'inline-flex items-center justify-center gap-2 rounded-[var(--btn-radius)] px-[var(--btn-px)] py-[var(--btn-py)] font-semibold transition active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none min-h-[var(--btn-min-h)]';
   const variants = {
     primary: 'bg-brand-700 text-white hover:bg-brand-800 shadow-sm',
-    secondary: 'bg-white text-brand-800 border border-brand-200 hover:bg-brand-50',
+    secondary: 'bg-surface text-brand-800 border border-brand-200 hover:bg-brand-50',
     danger: 'bg-red-600 text-white hover:bg-red-700',
     ghost: 'text-brand-700 hover:bg-brand-50',
   };
@@ -20,8 +21,8 @@ export function Input({ label, error, className = '', ...props }) {
     <label className="block">
       {label && <span className="mb-1.5 block text-sm font-medium text-slate-700">{label}</span>}
       <input
-        className={`w-full rounded-xl border px-4 py-3 text-base outline-none transition focus:ring-2 focus:ring-brand-500 ${
-          error ? 'border-red-400 bg-red-50' : 'border-slate-300 bg-white'
+        className={`w-full rounded-[var(--btn-radius)] border px-[var(--field-px)] py-[var(--field-py)] text-base outline-none transition focus:ring-2 focus:ring-brand-500 ${
+          error ? 'border-red-400 bg-red-50' : 'border-slate-300 bg-surface'
         } ${className}`}
         {...props}
       />
@@ -38,8 +39,8 @@ export function PasswordInput({ label, error, className = '', ...props }) {
       <div className="relative">
         <input
           type={visible ? 'text' : 'password'}
-          className={`w-full rounded-xl border px-4 py-3 pr-12 text-base outline-none transition focus:ring-2 focus:ring-brand-500 ${
-            error ? 'border-red-400 bg-red-50' : 'border-slate-300 bg-white'
+          className={`w-full rounded-[var(--btn-radius)] border px-[var(--field-px)] py-[var(--field-py)] pr-12 text-base outline-none transition focus:ring-2 focus:ring-brand-500 ${
+            error ? 'border-red-400 bg-red-50' : 'border-slate-300 bg-surface'
           } ${className}`}
           {...props}
         />
@@ -72,8 +73,8 @@ export function Textarea({ label, error, className = '', ...props }) {
     <label className="block">
       {label && <span className="mb-1.5 block text-sm font-medium text-slate-700">{label}</span>}
       <textarea
-        className={`w-full rounded-xl border px-4 py-3 text-base outline-none transition focus:ring-2 focus:ring-brand-500 ${
-          error ? 'border-red-400 bg-red-50' : 'border-slate-300 bg-white'
+        className={`w-full rounded-[var(--btn-radius)] border px-[var(--field-px)] py-[var(--field-py)] text-base outline-none transition focus:ring-2 focus:ring-brand-500 ${
+          error ? 'border-red-400 bg-red-50' : 'border-slate-300 bg-surface'
         } ${className}`}
         rows={4}
         {...props}
@@ -88,8 +89,8 @@ export function Select({ label, error, children, className = '', ...props }) {
     <label className="block">
       {label && <span className="mb-1.5 block text-sm font-medium text-slate-700">{label}</span>}
       <select
-        className={`w-full rounded-xl border px-4 py-3 text-base outline-none transition focus:ring-2 focus:ring-brand-500 ${
-          error ? 'border-red-400 bg-red-50' : 'border-slate-300 bg-white'
+        className={`w-full rounded-[var(--btn-radius)] border px-[var(--field-px)] py-[var(--field-py)] text-base outline-none transition focus:ring-2 focus:ring-brand-500 ${
+          error ? 'border-red-400 bg-red-50' : 'border-slate-300 bg-surface'
         } ${className}`}
         {...props}
       >
@@ -101,7 +102,11 @@ export function Select({ label, error, children, className = '', ...props }) {
 }
 
 export function Card({ children, className = '' }) {
-  return <div className={`rounded-2xl border border-slate-200 bg-white p-5 shadow-sm ${className}`}>{children}</div>;
+  return (
+    <div className={`rounded-[calc(var(--card-radius)+0.25rem)] border border-slate-200 bg-surface p-[var(--card-p)] shadow-sm ${className}`}>
+      {children}
+    </div>
+  );
 }
 
 export function Alert({ children, variant = 'error' }) {

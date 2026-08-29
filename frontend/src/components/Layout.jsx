@@ -61,7 +61,7 @@ export function Layout() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="sticky top-0 z-20 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 shadow-sm">
+      <header className="sticky top-0 z-20 flex items-center justify-between border-b border-slate-200 bg-surface px-4 py-3 shadow-sm">
         <button
           className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 lg:hidden"
           onClick={() => setMenuOpen((v) => !v)}
@@ -90,7 +90,7 @@ export function Layout() {
 
       <div className="mx-auto flex max-w-7xl">
         <aside
-          className={`fixed inset-y-0 left-0 z-30 w-72 transform border-r border-slate-200 bg-white p-4 pt-20 transition-transform lg:static lg:z-0 lg:translate-x-0 lg:pt-4 ${
+          className={`fixed inset-y-0 left-0 z-30 w-72 transform border-r border-slate-200 bg-surface p-4 pt-20 transition-transform lg:static lg:z-0 lg:translate-x-0 lg:pt-4 ${
             menuOpen ? 'translate-x-0' : '-translate-x-full'
           }`}
         >

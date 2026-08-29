@@ -3,6 +3,7 @@ import { Link, Navigate } from 'react-router-dom';
 import apiClient, { getErrorMessage } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { Card, Button, Select, Textarea, Input, Alert } from '../components/ui';
+import { EmployeeCombobox } from '../components/EmployeeCombobox';
 
 /** Tek bir dosya (görsel veya PDF) seçip R2'ye presigned URL ile yükler, elde edilen key'i döner. */
 function SingleFileUploader({ onUploaded, label = 'Dosya Yükle (Fotoğraf/PDF)' }) {
@@ -227,19 +228,14 @@ export function NewIncidentPage() {
 
           {form.type === 'KAZA' && (
             <>
-              <Select
-                label="Kazayı Geçiren Çalışan"
-                value={form.employeeId}
-                onChange={(e) => setForm((f) => ({ ...f, employeeId: e.target.value }))}
-                disabled={!form.companyId}
-              >
-                <option value="">Seçiniz</option>
-                {companyEmployees.map((emp) => (
-                  <option key={emp.id} value={emp.id}>
-                    {emp.fullName}
-                  </option>
-                ))}
-              </Select>
+              <div>
+                <span className="mb-1.5 block text-sm font-medium text-slate-700">Kazayı Geçiren Çalışan</span>
+                <EmployeeCombobox
+                  employees={companyEmployees}
+                  value={form.employeeId}
+                  onChange={(id) => setForm((f) => ({ ...f, employeeId: id }))}
+                />
+              </div>
               <Input
                 label="Kazazedenin Mesleği"
                 value={form.victimProfession}
@@ -248,19 +244,15 @@ export function NewIncidentPage() {
             </>
           )}
 
-          <Select
-            label="Görgü Tanığı"
-            value={form.witnessEmployeeId}
-            onChange={(e) => setForm((f) => ({ ...f, witnessEmployeeId: e.target.value }))}
-            disabled={!form.companyId}
-          >
-            <option value="">Yok</option>
-            {companyEmployees.map((emp) => (
-              <option key={emp.id} value={emp.id}>
-                {emp.fullName}
-              </option>
-            ))}
-          </Select>
+          <div>
+            <span className="mb-1.5 block text-sm font-medium text-slate-700">Görgü Tanığı</span>
+            <EmployeeCombobox
+              employees={companyEmployees}
+              value={form.witnessEmployeeId}
+              onChange={(id) => setForm((f) => ({ ...f, witnessEmployeeId: id }))}
+              placeholder="Görgü tanığı yok ise boş bırakın..."
+            />
+          </div>
           {form.witnessEmployeeId && (
             <Textarea
               label="Görgü Tanığı İfadesi"
