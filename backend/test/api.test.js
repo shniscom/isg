@@ -57,6 +57,7 @@ test.before(async () => {
     { key: 'proje_yonetme', name: 'Proje Yönetme' },
     { key: 'kullanici_yonetme', name: 'Kullanıcı Yönetme' },
     { key: 'firma_yonetme', name: 'Firma Yönetme' },
+    { key: 'kaza_bildirimi', name: 'Kaza / Ramak Kala Bildirimi Girme' },
   ]);
 
   await db.insert(schema.users).values({
@@ -2252,4 +2253,108 @@ test('firma güvenlik genişlemesi: roller, kaza/ramak kala, belgeler, İSG kuru
   assert.equal(companyDetail.body.equipmentCount, 2);
   assert.equal(companyDetail.body.mykStats.total, 2);
   assert.equal(companyDetail.body.mykStats.withCertificate, 1);
+});
+
+test('kaza_bildirimi yetkisi: firma_yonetme olmadan kaza/ramak kala girme + görüntüleme; düzenleme/silme hâlâ engelli; proje dışı firmaya erişim yok', async () => {
+  const projA = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Kaza Yetki Projesi A', code: 'TST-KAZA-001' } });
+  const projectAId = projA.body.project.id;
+  const projB = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Kaza Yetki Projesi B', code: 'TST-KAZA-002' } });
+  const projectBId = projB.body.project.id;
+
+  const companyA = await api('POST', '/admin/companies', { token: adminToken, body: { projectId: projectAId, name: 'Kaza Test Firması A', type: 'TASERON' } });
+  const companyAId = companyA.body.company.id;
+  const companyB = await api('POST', '/admin/companies', { token: adminToken, body: { projectId: projectBId, name: 'Kaza Test Firması B', type: 'TASERON' } });
+  const companyBId = companyB.body.company.id;
+
+  const rolesRes = await api('GET', '/admin/roles', { token: adminToken });
+  const formenRoleId = rolesRes.body.roles.find((r) => r.name === 'Formen').id;
+
+  const permsRes = await api('GET', '/admin/permissions', { token: adminToken });
+  const permId = (key) => permsRes.body.permissions.find((p) => p.key === key).id;
+
+  // Yalnızca projeye atanmış ama hiçbir özel yetkisi olmayan kullanıcı.
+  const noPermCreate = await api('POST', '/admin/users', { token: adminToken, body: { fullName: 'Yetkisiz Kullanıcı', username: 'kaza.yetkisiz' } });
+  await api('POST', `/admin/users/${noPermCreate.body.user.id}/projects`, { token: adminToken, body: { projectId: projectAId, roleId: formenRoleId } });
+
+  // kaza_bildirimi yetkisi verilmiş kullanıcı (proje A bağlamında).
+  const reporterCreate = await api('POST', '/admin/users', { token: adminToken, body: { fullName: 'Kaza Bildiren', username: 'kaza.bildiren' } });
+  const reporterId = reporterCreate.body.user.id;
+  await api('POST', `/admin/users/${reporterId}/projects`, { token: adminToken, body: { projectId: projectAId, roleId: formenRoleId } });
+  await api('POST', `/admin/users/${reporterId}/permissions`, { token: adminToken, body: { permissionId: permId('kaza_bildirimi'), projectId: projectAId } });
+
+  async function loginAndSelect(username, password, projectId, roleId) {
+    const login = await api('POST', '/auth/login', { body: { username, password } });
+    const select = await api('POST', '/auth/select-context', { body: { contextToken: login.body.contextToken, projectId, roleId } });
+    return select.body.accessToken;
+  }
+
+  const noPermToken = await loginAndSelect('kaza.yetkisiz', noPermCreate.body.tempPassword, projectAId, formenRoleId);
+  const reporterToken = await loginAndSelect('kaza.bildiren', reporterCreate.body.tempPassword, projectAId, formenRoleId);
+
+  // Bildirme formunun firma seçici referans verisi: kaza_bildirimi sahibi kendi projesindeki
+  // firmaları görebilir, hiçbir yetkisi olmayan kullanıcı ise 403 alır.
+  const refDataForbidden = await api('GET', '/admin/incidents/reference-data', { token: noPermToken });
+  assert.equal(refDataForbidden.status, 403);
+  const refData = await api('GET', '/admin/incidents/reference-data', { token: reporterToken });
+  assert.equal(refData.status, 200);
+  assert.ok(refData.body.companies.some((c) => c.id === companyAId));
+  assert.ok(!refData.body.companies.some((c) => c.id === companyBId));
+
+  // Bildirme formunda "kazayı geçiren çalışan" seçebilmek için, kaza_bildirimi sahibi seçtiği
+  // firmanın çalışan listesini görebilmeli (uygunsuzluk_acma ile aynı mantık).
+  const empCreate = await api('POST', '/employees', { token: adminToken, body: { projectId: projectAId, companyId: companyAId, fullName: 'Kaza Testi Çalışanı', nationalId: '44444444444' } });
+  const testEmployeeId = empCreate.body.employee.id;
+  const employeesForReporter = await api('GET', `/employees?projectId=${projectAId}&companyId=${companyAId}`, { token: reporterToken });
+  assert.equal(employeesForReporter.status, 200);
+  assert.ok(employeesForReporter.body.employees.some((e) => e.id === testEmployeeId));
+
+  // Hiçbir özel yetkisi olmayan kullanıcı ne kayıt girebilir ne de görebilir.
+  const forbiddenPost = await api('POST', '/admin/incidents', {
+    token: noPermToken,
+    body: { companyId: companyAId, type: 'RAMAK_KALA', eventDateTime: new Date().toISOString(), eventDescription: 'Yetkisiz deneme.' },
+  });
+  assert.equal(forbiddenPost.status, 403);
+  const forbiddenGet = await api('GET', `/admin/incidents?companyId=${companyAId}`, { token: noPermToken });
+  assert.equal(forbiddenGet.status, 403);
+
+  // kaza_bildirimi sahibi kendi projesindeki firma için kayıt girebilir.
+  const reportCreate = await api('POST', '/admin/incidents', {
+    token: reporterToken,
+    body: {
+      companyId: companyAId,
+      type: 'RAMAK_KALA',
+      eventDateTime: new Date().toISOString(),
+      eventDescription: 'Düşen malzeme az kalsın çarpıyordu.',
+      location: 'B Blok 2. kat',
+    },
+  });
+  assert.equal(reportCreate.status, 201);
+  const incidentId = reportCreate.body.incident.id;
+
+  // Girdiği kaydı görüntüleyebilir.
+  const reporterList = await api('GET', `/admin/incidents?companyId=${companyAId}`, { token: reporterToken });
+  assert.equal(reporterList.status, 200);
+  assert.equal(reporterList.body.incidents.length, 1);
+  assert.equal(reporterList.body.incidents[0].id, incidentId);
+
+  // Ama firma_yonetme olmadığı için düzenleyemez/silemez.
+  const forbiddenPatch = await api('PATCH', `/admin/incidents/${incidentId}`, { token: reporterToken, body: { actionsTaken: 'Deneme' } });
+  assert.equal(forbiddenPatch.status, 403);
+  const forbiddenDelete = await api('DELETE', `/admin/incidents/${incidentId}`, { token: reporterToken });
+  assert.equal(forbiddenDelete.status, 403);
+
+  // Kendi projesi dışındaki bir firma için kayıt giremez/göremez (proje bazlı kapsam).
+  const crossProjectPost = await api('POST', '/admin/incidents', {
+    token: reporterToken,
+    body: { companyId: companyBId, type: 'RAMAK_KALA', eventDateTime: new Date().toISOString(), eventDescription: 'Başka proje denemesi.' },
+  });
+  assert.equal(crossProjectPost.status, 403);
+  const crossProjectGet = await api('GET', `/admin/incidents?companyId=${companyBId}`, { token: reporterToken });
+  assert.equal(crossProjectGet.status, 403);
+
+  // Admin her zaman düzenleyebilir/silebilir.
+  const adminPatch = await api('PATCH', `/admin/incidents/${incidentId}`, { token: adminToken, body: { actionsTaken: 'Zemin uyarı levhası konuldu.' } });
+  assert.equal(adminPatch.status, 200);
+  const adminDelete = await api('DELETE', `/admin/incidents/${incidentId}`, { token: adminToken });
+  assert.equal(adminDelete.status, 200);
 });

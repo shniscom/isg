@@ -59,9 +59,10 @@ async function resolveCompanyScope(req, projectId, requestedCompanyId) {
     const scoped = await getScopedCompanyIds(req.user.sub, projectId);
     if (scoped.length > 0) {
       companyFilterIds = scoped;
-    } else if (hasPermission(req, 'uygunsuzluk_acma') && requestedCompanyId) {
-      // Uygunsuzluk açma yetkisi olan kişi, açma formunda seçtiği tek bir firmanın çalışan
-      // listesini görebilir (mükerrer kayıt oluşturmamak için); genel gözatma yetkisi vermez.
+    } else if ((hasPermission(req, 'uygunsuzluk_acma') || hasPermission(req, 'kaza_bildirimi')) && requestedCompanyId) {
+      // Uygunsuzluk açma ya da kaza/ramak kala bildirimi yetkisi olan kişi, açma formunda
+      // seçtiği tek bir firmanın çalışan listesini görebilir (mükerrer kayıt oluşturmamak
+      // ve kazayı geçiren/görgü tanığı seçebilmek için); genel gözatma yetkisi vermez.
       companyFilterIds = [requestedCompanyId];
     } else {
       throw ApiError.forbidden('Çalışan listesini görüntüleme yetkiniz yok.');

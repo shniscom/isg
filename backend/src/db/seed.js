@@ -34,6 +34,7 @@ const DEFAULT_PERMISSIONS = [
   { key: 'kullanici_yonetme', name: 'Kullanıcı Yönetme' },
   { key: 'firma_yonetme', name: 'Firma Yönetme' },
   { key: 'proje_yonetme', name: 'Proje Yönetme' },
+  { key: 'kaza_bildirimi', name: 'Kaza / Ramak Kala Bildirimi Girme' },
 ];
 
 async function seed() {
