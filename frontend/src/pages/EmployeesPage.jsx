@@ -44,6 +44,8 @@ export function EmployeesPage() {
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('fullName');
   const [statusTab, setStatusTab] = useState('active'); // 'active' | 'archived'
+  const [filterTab, setFilterTab] = useState('all'); // 'all' | 'myk' | 'untrained' | 'medicalExam' | 'isgRole'
+  const [stats, setStats] = useState(null);
 
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
@@ -58,10 +60,6 @@ export function EmployeesPage() {
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [rowDeletingId, setRowDeletingId] = useState(null);
-
-  const PAGE_SIZE = 30;
-  const [page, setPage] = useState(1);
-  const [pageInfo, setPageInfo] = useState(null); // { total, totalPages }
 
   useEffect(() => {
     if (user?.isSystemAdmin) {
@@ -91,32 +89,53 @@ export function EmployeesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProjectId]);
 
-  function loadEmployees(targetPage) {
+  function loadEmployees() {
     if (!activeProjectId || !selectedCompany) return;
-    const params = { companyId: selectedCompany.id, status: statusTab, sortBy, page: targetPage || page, pageSize: PAGE_SIZE };
+    const params = { companyId: selectedCompany.id, status: statusTab, sortBy };
+    if (filterTab !== 'all') params.filter = filterTab;
     if (user?.isSystemAdmin) params.projectId = activeProjectId;
     if (search) params.q = search;
     apiClient
       .get('/employees', { params })
       .then(({ data }) => {
         setEmployees(data.employees);
-        setPageInfo({ total: data.total ?? data.employees.length, totalPages: data.totalPages ?? 1 });
         setSelectedIds(new Set());
       })
       .catch((err) => setError(getErrorMessage(err)));
   }
 
-  // Firma, durum, sıralama veya arama değişince ilk sayfaya dön.
-  useEffect(() => {
-    setPage(1);
-    loadEmployees(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCompany, statusTab, sortBy, search]);
+  function loadStats() {
+    if (!activeProjectId || !selectedCompany) return;
+    const params = { companyId: selectedCompany.id, status: statusTab };
+    if (user?.isSystemAdmin) params.projectId = activeProjectId;
+    if (search) params.q = search;
+    apiClient
+      .get('/employees/stats', { params })
+      .then(({ data }) => setStats(data))
+      .catch((err) => setError(getErrorMessage(err)));
+  }
 
   useEffect(() => {
-    if (page > 1) loadEmployees(page);
+    loadEmployees();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page]);
+  }, [selectedCompany, statusTab, sortBy, search, filterTab]);
+
+  useEffect(() => {
+    loadStats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCompany, statusTab, search]);
+
+  useEffect(() => {
+    setFilterTab('all');
+  }, [selectedCompany, statusTab]);
+
+  const FILTER_TABS = [
+    { value: 'all', label: 'Tümü', count: stats?.total },
+    { value: 'myk', label: 'MYK', count: stats?.myk },
+    { value: 'untrained', label: 'Eğitimsiz', count: stats?.untrained },
+    { value: 'medicalExam', label: 'Tetkik', count: stats?.medicalExam },
+    { value: 'isgRole', label: 'İSG Görevi', count: stats?.isgRole },
+  ];
 
   async function handleFileChange(e) {
     const file = e.target.files?.[0];
@@ -137,6 +156,7 @@ export function EmployeesPage() {
       setImportResult(data);
       loadEmployees();
       loadCompanies();
+      loadStats();
     } catch (err) {
       setImportError(getErrorMessage(err));
     } finally {
@@ -162,6 +182,7 @@ export function EmployeesPage() {
       setQuickAdd({ fullName: '', nationalId: '', position: '', startDate: '' });
       loadEmployees();
       loadCompanies();
+      loadStats();
     } catch (err) {
       setQuickAddError(getErrorMessage(err));
     } finally {
@@ -193,6 +214,7 @@ export function EmployeesPage() {
       await apiClient.delete(`/employees/${emp.id}`);
       loadEmployees();
       loadCompanies();
+      loadStats();
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -211,6 +233,7 @@ export function EmployeesPage() {
       await apiClient.post('/employees/bulk-delete', payload);
       loadEmployees();
       loadCompanies();
+      loadStats();
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -297,6 +320,21 @@ export function EmployeesPage() {
         >
           Çıkış Yapanlar / Arşiv
         </button>
+      </div>
+
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {FILTER_TABS.map((f) => (
+          <button
+            key={f.value}
+            type="button"
+            onClick={() => setFilterTab(f.value)}
+            className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium transition ${
+              filterTab === f.value ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600'
+            }`}
+          >
+            {f.label} ({f.count ?? '…'})
+          </button>
+        ))}
       </div>
 
       <div className="flex flex-col gap-2 sm:flex-row">
@@ -473,7 +511,6 @@ export function EmployeesPage() {
                     <StatusChip chip={trainingChip} />
                     <StatusChip chip={medicalChip} />
                     {emp.isgRole && <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[11px] font-medium text-purple-700">🦺 {emp.isgRole}</span>}
-                    {emp.mykCertificateNo && <span className="rounded-full bg-teal-100 px-2 py-0.5 text-[11px] font-medium text-teal-700">🎓 MYK</span>}
                   </div>
                 </Link>
                 {user?.isSystemAdmin && (
@@ -492,30 +529,6 @@ export function EmployeesPage() {
           );
         })}
       </div>
-
-      {pageInfo && pageInfo.totalPages > 1 && (
-        <div className="flex items-center justify-between gap-2 pt-1 text-sm">
-          <button
-            type="button"
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={page <= 1}
-            className="rounded-lg px-3 py-1.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-40"
-          >
-            ‹ Önceki
-          </button>
-          <span className="text-slate-500">
-            Sayfa {page} / {pageInfo.totalPages} · {pageInfo.total} kayıt
-          </span>
-          <button
-            type="button"
-            onClick={() => setPage((p) => Math.min(pageInfo.totalPages, p + 1))}
-            disabled={page >= pageInfo.totalPages}
-            className="rounded-lg px-3 py-1.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-40"
-          >
-            Sonraki ›
-          </button>
-        </div>
-      )}
     </div>
   );
 }

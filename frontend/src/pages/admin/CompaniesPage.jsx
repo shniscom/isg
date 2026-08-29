@@ -24,6 +24,11 @@ export function CompaniesPage() {
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({ name: '', type: 'DIGER', taxNumber: '', sgkNumber: '', phone: '', scopeOfWork: '' });
 
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+  const [editError, setEditError] = useState(null);
+  const [editSubmitting, setEditSubmitting] = useState(false);
+
   useEffect(() => {
     apiClient
       .get('/admin/projects')
@@ -68,6 +73,41 @@ export function CompaniesPage() {
   async function handleDeactivate(company) {
     await apiClient.delete(`/admin/companies/${company.id}`);
     await loadCompanies(selectedProjectId);
+  }
+
+  function openEdit(company) {
+    setEditingId(company.id);
+    setEditError(null);
+    setEditForm({
+      name: company.name || '',
+      type: company.type || 'DIGER',
+      taxNumber: company.taxNumber || '',
+      sgkNumber: company.sgkNumber || '',
+      phone: company.phone || '',
+      scopeOfWork: company.scopeOfWork || '',
+    });
+  }
+
+  function closeEdit() {
+    setEditingId(null);
+    setEditForm(null);
+    setEditError(null);
+  }
+
+  async function handleSaveEdit(e) {
+    e.preventDefault();
+    if (!editingId || !editForm) return;
+    setEditError(null);
+    setEditSubmitting(true);
+    try {
+      await apiClient.patch(`/admin/companies/${editingId}`, editForm);
+      closeEdit();
+      await loadCompanies(selectedProjectId);
+    } catch (err) {
+      setEditError(getErrorMessage(err));
+    } finally {
+      setEditSubmitting(false);
+    }
   }
 
   return (
@@ -125,32 +165,108 @@ export function CompaniesPage() {
       <div className="space-y-3">
         {companies?.length === 0 && <p className="text-sm text-slate-500">Bu projede henüz firma tanımlanmamış.</p>}
         {companies?.map((c) => (
-          <Link key={c.id} to={`/admin/firmalar/${c.id}`}>
-            <Card className="flex items-center justify-between transition hover:border-brand-300 hover:shadow-md">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-slate-800">{c.name}</span>
-                  <Badge>{typeLabel(c.type)}</Badge>
-                  {!c.isActive && <Badge variant="danger">Pasif</Badge>}
+          <div key={c.id}>
+            <Link to={`/admin/firmalar/${c.id}`}>
+              <Card className="flex items-center justify-between transition hover:border-brand-300 hover:shadow-md">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-slate-800">{c.name}</span>
+                    <Badge>{typeLabel(c.type)}</Badge>
+                    {!c.isActive && <Badge variant="danger">Pasif</Badge>}
+                  </div>
+                  <div className="text-sm text-slate-500">
+                    {c.sgkNumber ? `SGK: ${c.sgkNumber}` : ''} {c.phone ? `· ${c.phone}` : ''}
+                  </div>
                 </div>
-                <div className="text-sm text-slate-500">
-                  {c.sgkNumber ? `SGK: ${c.sgkNumber}` : ''} {c.phone ? `· ${c.phone}` : ''}
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    aria-label="Firmayı düzenle"
+                    title="Düzenle"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (editingId === c.id) closeEdit();
+                      else openEdit(c);
+                    }}
+                    className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  >
+                    ✏️
+                  </button>
+                  {c.isActive && (
+                    <button
+                      type="button"
+                      aria-label="Firmayı pasifleştir"
+                      title="Pasifleştir"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleDeactivate(c);
+                      }}
+                      className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                    >
+                      ⏸️
+                    </button>
+                  )}
                 </div>
-              </div>
-              {c.isActive && (
-                <Button
-                  variant="secondary"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    handleDeactivate(c);
-                  }}
-                >
-                  Pasifleştir
-                </Button>
-              )}
-            </Card>
-          </Link>
+              </Card>
+            </Link>
+
+            {editingId === c.id && editForm && (
+              <Card className="mt-2">
+                <form onSubmit={handleSaveEdit} className="space-y-4">
+                  {editError && <Alert>{editError}</Alert>}
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <Input
+                      label="Firma Adı"
+                      value={editForm.name}
+                      onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                      required
+                    />
+                    <Select
+                      label="Firma Türü"
+                      value={editForm.type}
+                      onChange={(e) => setEditForm({ ...editForm, type: e.target.value })}
+                    >
+                      {COMPANY_TYPES.map((t) => (
+                        <option key={t.value} value={t.value}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </Select>
+                    <Input
+                      label="Vergi Numarası"
+                      value={editForm.taxNumber}
+                      onChange={(e) => setEditForm({ ...editForm, taxNumber: e.target.value })}
+                    />
+                    <Input
+                      label="SGK Sicil Numarası"
+                      value={editForm.sgkNumber}
+                      onChange={(e) => setEditForm({ ...editForm, sgkNumber: e.target.value })}
+                    />
+                    <Input
+                      label="Telefon"
+                      value={editForm.phone}
+                      onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                    />
+                    <Input
+                      label="Projede Yaptığı İş"
+                      value={editForm.scopeOfWork}
+                      onChange={(e) => setEditForm({ ...editForm, scopeOfWork: e.target.value })}
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <Button type="submit" disabled={editSubmitting}>
+                      {editSubmitting ? 'Kaydediliyor...' : 'Değişiklikleri Kaydet'}
+                    </Button>
+                    <Button type="button" variant="secondary" onClick={closeEdit}>
+                      Vazgeç
+                    </Button>
+                  </div>
+                </form>
+              </Card>
+            )}
+          </div>
         ))}
       </div>
     </div>
