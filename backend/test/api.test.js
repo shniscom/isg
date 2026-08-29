@@ -1771,6 +1771,66 @@ test('çalışanlar: sayfalama - page/pageSize verilince sayfa sayfa döner, ver
   assert.equal(new Set(allNames).size, 5);
 });
 
+test('çalışanlar: filtre sekmeleri (myk/untrained/medicalExam/isgRole) ve /employees/stats sayıları', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Filtre Test Projesi', code: 'TST-EMPFILTER-001' } });
+  const projectId = proj.body.project.id;
+  const company = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Filtre Firması', type: 'TASERON' } });
+  const companyId = company.body.company.id;
+
+  const empA = await api('POST', '/employees', {
+    token: adminToken,
+    body: {
+      projectId,
+      companyId,
+      fullName: 'MYK Sahibi Çalışan',
+      mykCertificateNo: 'MYK-001',
+      mykCertificateDate: '2024-01-01',
+      isgTrainingDate: '2024-01-01',
+    },
+  });
+  const empB = await api('POST', '/employees', {
+    token: adminToken,
+    body: {
+      projectId,
+      companyId,
+      fullName: 'Eğitimsiz Tetkikli Çalışan',
+      medicalExamDate: '2024-02-01',
+    },
+  });
+  const empC = await api('POST', '/employees', {
+    token: adminToken,
+    body: {
+      projectId,
+      companyId,
+      fullName: 'İSG Görevli Çalışan',
+      isgTrainingDate: '2024-01-01',
+      isgRole: 'İSG Uzmanı',
+    },
+  });
+  assert.equal(empA.status, 201);
+  assert.equal(empB.status, 201);
+  assert.equal(empC.status, 201);
+
+  const stats = await api('GET', `/employees/stats?projectId=${projectId}&companyId=${companyId}`, { token: adminToken });
+  assert.equal(stats.body.total, 3);
+  assert.equal(stats.body.myk, 1);
+  assert.equal(stats.body.untrained, 1);
+  assert.equal(stats.body.medicalExam, 1);
+  assert.equal(stats.body.isgRole, 1);
+
+  const mykList = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&filter=myk`, { token: adminToken });
+  assert.deepEqual(mykList.body.employees.map((e) => e.fullName), ['MYK Sahibi Çalışan']);
+
+  const untrainedList = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&filter=untrained`, { token: adminToken });
+  assert.deepEqual(untrainedList.body.employees.map((e) => e.fullName), ['Eğitimsiz Tetkikli Çalışan']);
+
+  const medicalList = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&filter=medicalExam`, { token: adminToken });
+  assert.deepEqual(medicalList.body.employees.map((e) => e.fullName), ['Eğitimsiz Tetkikli Çalışan']);
+
+  const isgRoleList = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&filter=isgRole`, { token: adminToken });
+  assert.deepEqual(isgRoleList.body.employees.map((e) => e.fullName), ['İSG Görevli Çalışan']);
+});
+
 test('atanabilir kişiler: bölge (blok) ataması ve firma+genel/tüm kullanıcı filtreleri', async () => {
   const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Test Şantiyesi 23', code: 'TST-023' } });
   const projectId = proj.body.project.id;

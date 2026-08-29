@@ -1,6 +1,6 @@
 const express = require('express');
 const { z } = require('zod');
-const { eq, and, or, count, ilike, inArray, desc, asc } = require('drizzle-orm');
+const { eq, and, or, count, ilike, inArray, desc, asc, isNull, isNotNull, ne, sql } = require('drizzle-orm');
 const { db } = require('../db/client');
 const { employees, nonconformities, companies, userProjects, incidents } = require('../db/schema');
 const { requireAuth } = require('../middleware/auth');
@@ -144,6 +144,50 @@ const EMPLOYEE_LIST_COLUMNS = {
   createdAt: employees.createdAt,
 };
 
+// ---------------------------------------------------------------------------
+// Çalışanlar sekmesindeki filtre sekmeleri (tümü/myk/eğitimsiz/tetkik/İSG görevi) için sayılar.
+// GET / listesiyle aynı kapsam (proje/firma/durum/arama) mantığını kullanır, sadece "filter"
+// parametresini uygulamadan her bir filtrenin kaç kayıt döndüreceğini tek sorguda hesaplar.
+// ---------------------------------------------------------------------------
+router.get(
+  '/stats',
+  asyncHandler(async (req, res) => {
+    const projectId = resolveProjectId(req, req.query.projectId);
+    const companyFilterIds = await resolveCompanyScope(req, projectId, req.query.companyId || null);
+
+    const conditions = [eq(employees.projectId, projectId)];
+    if (companyFilterIds) {
+      if (companyFilterIds.length === 0) {
+        return res.json({ total: 0, myk: 0, untrained: 0, medicalExam: 0, isgRole: 0 });
+      }
+      conditions.push(or(...companyFilterIds.map((id) => eq(employees.companyId, id))));
+    }
+
+    const status = req.query.status === 'archived' ? 'archived' : req.query.status === 'all' ? 'all' : 'active';
+    if (status === 'active') conditions.push(eq(employees.isActive, true));
+    else if (status === 'archived') conditions.push(eq(employees.isActive, false));
+
+    const searchTerm = req.query.q || req.query.search;
+    if (searchTerm) {
+      conditions.push(or(ilike(employees.fullName, `%${searchTerm}%`), ilike(employees.nationalId, `%${searchTerm}%`)));
+    }
+
+    const [row] = await db
+      .select({
+        total: count(),
+        myk: sql`count(*) filter (where ${employees.mykCertificateNo} is not null and ${employees.mykCertificateNo} <> '')`.mapWith(Number),
+        untrained: sql`count(*) filter (where ${employees.isgTrainingDate} is null)`.mapWith(Number),
+        medicalExam: sql`count(*) filter (where ${employees.medicalExamDate} is not null)`.mapWith(Number),
+        isgRole: sql`count(*) filter (where ${employees.isgRole} is not null and ${employees.isgRole} <> '')`.mapWith(Number),
+      })
+      .from(employees)
+      .leftJoin(companies, eq(employees.companyId, companies.id))
+      .where(and(...conditions));
+
+    res.json(row);
+  })
+);
+
 router.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -165,6 +209,18 @@ router.get(
     const searchTerm = req.query.q || req.query.search;
     if (searchTerm) {
       conditions.push(or(ilike(employees.fullName, `%${searchTerm}%`), ilike(employees.nationalId, `%${searchTerm}%`)));
+    }
+
+    // Filtre sekmeleri: tümü (varsayılan) | myk | untrained (eğitimsiz) | medicalExam (tetkik) | isgRole (İSG görevi)
+    const filter = req.query.filter;
+    if (filter === 'myk') {
+      conditions.push(and(isNotNull(employees.mykCertificateNo), ne(employees.mykCertificateNo, '')));
+    } else if (filter === 'untrained') {
+      conditions.push(isNull(employees.isgTrainingDate));
+    } else if (filter === 'medicalExam') {
+      conditions.push(isNotNull(employees.medicalExamDate));
+    } else if (filter === 'isgRole') {
+      conditions.push(and(isNotNull(employees.isgRole), ne(employees.isgRole, '')));
     }
 
     const sortColumn = SORTABLE_COLUMNS[req.query.sortBy] || employees.fullName;
