@@ -66,6 +66,8 @@ export function EmployeeDetailPage() {
       ek2Note: data.employee.ek2Note || '',
       healthAuthoritySignatureNote: data.employee.healthAuthoritySignatureNote || '',
       isgRole: data.employee.isgRole || '',
+      mykCertificateNo: data.employee.mykCertificateNo || '',
+      mykCertificateDate: toDateInput(data.employee.mykCertificateDate),
       startDate: toDateInput(data.employee.startDate),
     });
     setShowEdit(true);
@@ -86,6 +88,8 @@ export function EmployeeDetailPage() {
         ek2Note: editForm.ek2Note.trim() || null,
         healthAuthoritySignatureNote: editForm.healthAuthoritySignatureNote.trim() || null,
         isgRole: editForm.isgRole.trim() || null,
+        mykCertificateNo: editForm.mykCertificateNo.trim() || null,
+        mykCertificateDate: editForm.mykCertificateDate || null,
         startDate: editForm.startDate || null,
       });
       setShowEdit(false);
@@ -162,6 +166,7 @@ export function EmployeeDetailPage() {
           <StatusChip chip={trainingChip} />
           <StatusChip chip={medicalChip} />
           {employee.isgRole && <span className="rounded-full bg-purple-100 px-2.5 py-1 text-xs font-medium text-purple-700">🦺 İSG Görevi: {employee.isgRole}</span>}
+          {employee.mykCertificateNo && <span className="rounded-full bg-teal-100 px-2.5 py-1 text-xs font-medium text-teal-700">🎓 MYK: {employee.mykCertificateNo}</span>}
         </div>
 
         <div className="grid grid-cols-1 gap-x-4 gap-y-1.5 text-sm text-slate-600 sm:grid-cols-2">
@@ -286,6 +291,13 @@ export function EmployeeDetailPage() {
               onChange={(e) => setEditForm((f) => ({ ...f, healthAuthoritySignatureNote: e.target.value }))}
             />
             <Input label="İSG Görevi" value={editForm.isgRole} onChange={(e) => setEditForm((f) => ({ ...f, isgRole: e.target.value }))} />
+            <Input label="MYK Belge No" value={editForm.mykCertificateNo} onChange={(e) => setEditForm((f) => ({ ...f, mykCertificateNo: e.target.value }))} />
+            <Input
+              label="MYK Belge Tarihi"
+              type="date"
+              value={editForm.mykCertificateDate}
+              onChange={(e) => setEditForm((f) => ({ ...f, mykCertificateDate: e.target.value }))}
+            />
             <div className="flex gap-2">
               <Button type="button" onClick={handleSaveEdit} disabled={editSubmitting}>
                 {editSubmitting ? 'Kaydediliyor...' : 'Kaydet'}

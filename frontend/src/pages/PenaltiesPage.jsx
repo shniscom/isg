@@ -15,7 +15,6 @@ const STATUS_FILTERS = ['BEKLEMEDE', 'ONAYLANDI', 'REDDEDILDI'];
 export function PenaltiesPage() {
   const { user } = useAuth();
   const [status, setStatus] = useState('BEKLEMEDE');
-  const [penalties, setPenalties] = useState(null);
   const [error, setError] = useState(null);
   const [rejectingId, setRejectingId] = useState(null);
   const [rejectNote, setRejectNote] = useState('');
@@ -36,13 +35,17 @@ export function PenaltiesPage() {
     }
   }, [user]);
 
+  const [allPenalties, setAllPenalties] = useState(null);
+
   async function load() {
     if (user?.isSystemAdmin && !adminProjectId) return;
     try {
-      const params = { status };
+      // Durum filtresi olmadan tüm kayıtlar çekilir; başlıklardaki sayılar ve seçili sekmenin
+      // listesi bu tek listeden türetilir (STATUS_FILTERS.map ile ayrı ayrı istek atmaya gerek kalmaz).
+      const params = {};
       if (user?.isSystemAdmin) params.projectId = adminProjectId;
       const { data } = await apiClient.get('/penalties', { params });
-      setPenalties(data.penalties);
+      setAllPenalties(data.penalties);
     } catch (err) {
       setError(getErrorMessage(err));
     }
@@ -51,7 +54,13 @@ export function PenaltiesPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, adminProjectId]);
+  }, [adminProjectId]);
+
+  const statusCounts = STATUS_FILTERS.reduce((acc, s) => {
+    acc[s] = allPenalties ? allPenalties.filter((p) => p.status === s).length : 0;
+    return acc;
+  }, {});
+  const penalties = allPenalties ? allPenalties.filter((p) => p.status === status) : null;
 
   async function handleApprove(id) {
     setBusyId(id);
@@ -107,7 +116,7 @@ export function PenaltiesPage() {
               status === s ? 'bg-brand-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
             }`}
           >
-            {PENALTY_STATUS_LABELS[s]}
+            {PENALTY_STATUS_LABELS[s]} – {statusCounts[s]}
           </button>
         ))}
       </div>

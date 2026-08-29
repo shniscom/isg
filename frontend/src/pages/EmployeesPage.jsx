@@ -473,6 +473,7 @@ export function EmployeesPage() {
                     <StatusChip chip={trainingChip} />
                     <StatusChip chip={medicalChip} />
                     {emp.isgRole && <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[11px] font-medium text-purple-700">🦺 {emp.isgRole}</span>}
+                    {emp.mykCertificateNo && <span className="rounded-full bg-teal-100 px-2 py-0.5 text-[11px] font-medium text-teal-700">🎓 MYK</span>}
                   </div>
                 </Link>
                 {user?.isSystemAdmin && (

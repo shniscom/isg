@@ -47,6 +47,26 @@ const penaltySanctionEnum = pgEnum('penalty_sanction', ['PARA_CEZASI', 'UYARI', 
 const penaltyStatusEnum = pgEnum('penalty_status', ['BEKLEMEDE', 'ONAYLANDI', 'REDDEDILDI']);
 const extensionStatusEnum = pgEnum('extension_status', ['BEKLEMEDE', 'ONAYLANDI', 'REDDEDILDI']);
 const archiveStatusEnum = pgEnum('archive_status', ['OLUSTURULDU', 'SILINDI']);
+const companyRoleTypeEnum = pgEnum('company_role_type', [
+  'ISVEREN',
+  'ISVEREN_VEKILI',
+  'SANTIYE_SEFI',
+  'CALISAN_TEMSILCISI',
+  'DESTEK_PERSONELI',
+  'PROJE_MUDURU',
+  'ISG_UZMANI',
+  'ISYERI_HEKIMI',
+  'DIGER_SAGLIK_PERSONELI',
+  'ILKYARDIM',
+  'ARAMA_KURTARMA',
+  'KORUMA',
+]);
+const companyRoleSourceEnum = pgEnum('company_role_source', ['CALISAN', 'DISARIDAN']);
+const incidentTypeEnum = pgEnum('incident_type', ['KAZA', 'RAMAK_KALA']);
+const companyDocTypeEnum = pgEnum('company_doc_type', ['RISK_ANALIZI', 'ACIL_DURUM_EYLEM_PLANI']);
+const dangerClassEnum = pgEnum('danger_class', ['COK_TEHLIKELI', 'TEHLIKELI', 'AZ_TEHLIKELI']);
+const equipmentAssignedToEnum = pgEnum('equipment_assigned_to', ['FIRMA', 'KISI']);
+const equipmentOperatorSourceEnum = pgEnum('equipment_operator_source', ['CALISAN', 'DISARIDAN', 'YOK']);
 
 const users = pgTable('users', {
   id: text('id').primaryKey().$defaultFn(genId),
@@ -103,6 +123,9 @@ const companies = pgTable('companies', {
   address: text('address'),
   scopeOfWork: text('scope_of_work'),
   responsibleBlockId: text('responsible_block_id').references(() => projectBlocks.id, { onDelete: 'set null' }),
+  // İSG kurulu kurulması gerekiyor mu ve tehlike sınıfı nedir (kurul periyodu bu sınıfa göre hesaplanır).
+  requiresBoard: boolean('requires_board').notNull().default(false),
+  dangerClass: dangerClassEnum('danger_class'),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -209,6 +232,8 @@ const employees = pgTable('employees', {
   ek2Note: text('ek2_note'), // EK-2 formu notu/tarihi (serbest metin)
   healthAuthoritySignatureNote: text('health_authority_signature_note'), // sağlık yetkilisi imza notu
   isgRole: text('isg_role'), // İSG görevi (ör. Çalışan Temsilcisi)
+  mykCertificateNo: text('myk_certificate_no'), // MYK mesleki yeterlilik belge no
+  mykCertificateDate: timestamp('myk_certificate_date', { withTimezone: true }), // MYK belgesinin alındığı tarih
   startDate: timestamp('start_date', { withTimezone: true }), // işe giriş tarihi
   endDate: timestamp('end_date', { withTimezone: true }), // işten çıkış tarihi (doluysa arşivde sayılır)
   isActive: boolean('is_active').notNull().default(true),
@@ -414,6 +439,136 @@ const archivesRelations = relations(archives, ({ one }) => ({
   deletedBy: one(users, { fields: [archives.deletedById], references: [users.id] }),
 }));
 
+/**
+ * Firma bünyesindeki organizasyonel roller (İşveren, İşveren Vekili, Şantiye Şefi, Çalışan
+ * Temsilcisi, Destek Personeli, Proje Müdürü, İSG Uzmanı, İşyeri Hekimi, Diğer Sağlık
+ * Personeli) ve acil durum ekipleri (İlkyardım, Arama-Kurtarma, Koruma) için tek bir atama
+ * tablosu. Kişi ya firmanın çalışan listesinden (employeeId) ya da dışarıdan/OSGB üzerinden
+ * (outside* alanları) gelebilir. Bir kişi birden fazla role sahip olabileceği için her rol
+ * ayrı bir satırdır. Sertifika alanları role göre kullanılır (ör. İSG Uzmanı için
+ * certificateClass = "B Sınıfı", İlkyardım için certificateStartDate/EndDate).
+ */
+const companyRoleAssignments = pgTable('company_role_assignments', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  companyId: text('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
+  roleType: companyRoleTypeEnum('role_type').notNull(),
+  source: companyRoleSourceEnum('source').notNull().default('CALISAN'),
+  employeeId: text('employee_id').references(() => employees.id, { onDelete: 'set null' }),
+  outsideFullName: text('outside_full_name'),
+  outsideCompanyName: text('outside_company_name'), // ör. hizmet alınan OSGB adı
+  outsideNationalId: text('outside_national_id'),
+  outsidePhone: text('outside_phone'),
+  certificateNo: text('certificate_no'),
+  certificateClass: text('certificate_class'), // ör. İSG Uzmanı "B Sınıfı", İşyeri Hekimi sınıfı
+  certificateStartDate: timestamp('certificate_start_date', { withTimezone: true }),
+  certificateEndDate: timestamp('certificate_end_date', { withTimezone: true }),
+  notes: text('notes'),
+  createdById: text('created_by_id').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('company_role_assignments_company_idx').on(table.companyId),
+  index('company_role_assignments_employee_idx').on(table.employeeId),
+]);
+
+/**
+ * Kaza ve ramak kala olay kayıtları. Mevzuata uygun temel alanları taşır. Ramak kala
+ * olaylarında kazazede/hastane/rapor alanları genelde boş bırakılır.
+ */
+const incidents = pgTable('incidents', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  companyId: text('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
+  type: incidentTypeEnum('type').notNull(),
+  eventDateTime: timestamp('event_date_time', { withTimezone: true }).notNull(),
+  employeeId: text('employee_id').references(() => employees.id, { onDelete: 'set null' }), // kazayı geçiren çalışan
+  eventDescription: text('event_description').notNull(), // olay şekli
+  location: text('location'), // olay yeri
+  cause: text('cause'), // kazanın/olayın sebebi
+  witnessEmployeeId: text('witness_employee_id').references(() => employees.id, { onDelete: 'set null' }),
+  witnessStatement: text('witness_statement'),
+  referredToHospital: boolean('referred_to_hospital').notNull().default(false),
+  hospitalName: text('hospital_name'),
+  firstAidGiven: boolean('first_aid_given').notNull().default(false),
+  firstAidGivenBy: text('first_aid_given_by'),
+  victimProfession: text('victim_profession'),
+  doctorReportPhotoKey: text('doctor_report_photo_key'), // R2 object key
+  reportDaysOff: integer('report_days_off'),
+  returnToWorkDate: timestamp('return_to_work_date', { withTimezone: true }),
+  actionsTaken: text('actions_taken'),
+  createdById: text('created_by_id').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('incidents_company_idx').on(table.companyId, table.type),
+]);
+
+/**
+ * Firmanın risk analizi raporu ve acil durum eylem planı gibi periyodik/onaylı belgeleri.
+ */
+const companyDocuments = pgTable('company_documents', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  companyId: text('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
+  docType: companyDocTypeEnum('doc_type').notNull(),
+  preparedDate: timestamp('prepared_date', { withTimezone: true }),
+  approved: boolean('approved').notNull().default(false),
+  approvedDate: timestamp('approved_date', { withTimezone: true }),
+  validUntil: timestamp('valid_until', { withTimezone: true }),
+  fileObjectKey: text('file_object_key'),
+  notes: text('notes'),
+  createdById: text('created_by_id').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('company_documents_company_idx').on(table.companyId, table.docType),
+]);
+
+/**
+ * İSG kurulu toplantı kayıtları. Normal (periyodik) ve olağanüstü toplantılar aynı tabloda,
+ * isExtraordinary alanıyla ayrılır. Bir dönemde (periodLabel) hem normal hem birden fazla
+ * olağanüstü toplantı olabilir.
+ */
+const boardMeetings = pgTable('board_meetings', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  companyId: text('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
+  meetingDate: timestamp('meeting_date', { withTimezone: true }).notNull(),
+  periodLabel: text('period_label').notNull(), // 'YYYY-MM'
+  isExtraordinary: boolean('is_extraordinary').notNull().default(false),
+  attendanceFormFileKey: text('attendance_form_file_key'), // imzalı katılım formu (R2)
+  notes: text('notes'),
+  createdById: text('created_by_id').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('board_meetings_company_period_idx').on(table.companyId, table.periodLabel),
+]);
+
+/**
+ * Sahada kullanılan ekipman/iş makinesi listesi. Proje + firma bazlıdır; kişiye ya da firmaya
+ * zimmetli olabilir, operatörü çalışan listesinden ya da dışarıdan (belge bilgileriyle) olabilir.
+ */
+const equipment = pgTable('equipment', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  companyId: text('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(), // ekipman adı/tipi
+  serialNumber: text('serial_number'),
+  licenseNumber: text('license_number'), // ruhsat no
+  periodicInspectionDate: timestamp('periodic_inspection_date', { withTimezone: true }),
+  periodicInspectionValidUntil: timestamp('periodic_inspection_valid_until', { withTimezone: true }),
+  hasDamage: boolean('has_damage').notNull().default(false),
+  damageDescription: text('damage_description'),
+  fitForUse: boolean('fit_for_use').notNull().default(true),
+  assignedTo: equipmentAssignedToEnum('assigned_to').notNull().default('FIRMA'),
+  assignedEmployeeId: text('assigned_employee_id').references(() => employees.id, { onDelete: 'set null' }),
+  operatorSource: equipmentOperatorSourceEnum('operator_source').notNull().default('YOK'),
+  operatorEmployeeId: text('operator_employee_id').references(() => employees.id, { onDelete: 'set null' }),
+  operatorOutsideFullName: text('operator_outside_full_name'),
+  operatorOutsideCompanyName: text('operator_outside_company_name'),
+  operatorOutsideNationalId: text('operator_outside_national_id'),
+  operatorOutsideSgkNo: text('operator_outside_sgk_no'),
+  operatorCertificateNo: text('operator_certificate_no'),
+  createdById: text('created_by_id').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('equipment_project_company_idx').on(table.projectId, table.companyId),
+]);
+
 /** Sistem geneli basit ayarlar (ör. galeriden fotoğraf seçmeye izin verilsin mi). */
 const systemSettings = pgTable('system_settings', {
   key: text('key').primaryKey(),
@@ -589,6 +744,13 @@ module.exports = {
   penaltyStatusEnum,
   extensionStatusEnum,
   archiveStatusEnum,
+  companyRoleTypeEnum,
+  companyRoleSourceEnum,
+  incidentTypeEnum,
+  companyDocTypeEnum,
+  dangerClassEnum,
+  equipmentAssignedToEnum,
+  equipmentOperatorSourceEnum,
   users,
   projects,
   projectBlocks,
@@ -613,6 +775,11 @@ module.exports = {
   systemSettings,
   userInvites,
   archives,
+  companyRoleAssignments,
+  incidents,
+  companyDocuments,
+  boardMeetings,
+  equipment,
   archivesRelations,
   usersRelations,
   projectsRelations,

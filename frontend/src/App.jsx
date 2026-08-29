@@ -14,6 +14,7 @@ import { PermissionsPage } from './pages/PermissionsPage';
 import { ProjectsPage } from './pages/admin/ProjectsPage';
 import { ProjectDetailPage } from './pages/admin/ProjectDetailPage';
 import { CompaniesPage } from './pages/admin/CompaniesPage';
+import { CompanyDetailPage } from './pages/admin/CompanyDetailPage';
 import { UsersPage } from './pages/admin/UsersPage';
 import { UserDetailPage } from './pages/admin/UserDetailPage';
 import { RolesPage } from './pages/admin/RolesPage';
@@ -108,6 +109,14 @@ function AppRoutes() {
           element={
             <PermissionRoute permission="firma_yonetme">
               <CompaniesPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/admin/firmalar/:id"
+          element={
+            <PermissionRoute permission="firma_yonetme">
+              <CompanyDetailPage />
             </PermissionRoute>
           }
         />

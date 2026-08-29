@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import apiClient, { getErrorMessage } from '../../api/client';
 import { Card, Button, Input, Select, Alert, Badge } from '../../components/ui';
 
@@ -124,23 +125,32 @@ export function CompaniesPage() {
       <div className="space-y-3">
         {companies?.length === 0 && <p className="text-sm text-slate-500">Bu projede henüz firma tanımlanmamış.</p>}
         {companies?.map((c) => (
-          <Card key={c.id} className="flex items-center justify-between">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-slate-800">{c.name}</span>
-                <Badge>{typeLabel(c.type)}</Badge>
-                {!c.isActive && <Badge variant="danger">Pasif</Badge>}
+          <Link key={c.id} to={`/admin/firmalar/${c.id}`}>
+            <Card className="flex items-center justify-between transition hover:border-brand-300 hover:shadow-md">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-slate-800">{c.name}</span>
+                  <Badge>{typeLabel(c.type)}</Badge>
+                  {!c.isActive && <Badge variant="danger">Pasif</Badge>}
+                </div>
+                <div className="text-sm text-slate-500">
+                  {c.sgkNumber ? `SGK: ${c.sgkNumber}` : ''} {c.phone ? `· ${c.phone}` : ''}
+                </div>
               </div>
-              <div className="text-sm text-slate-500">
-                {c.sgkNumber ? `SGK: ${c.sgkNumber}` : ''} {c.phone ? `· ${c.phone}` : ''}
-              </div>
-            </div>
-            {c.isActive && (
-              <Button variant="secondary" onClick={() => handleDeactivate(c)}>
-                Pasifleştir
-              </Button>
-            )}
-          </Card>
+              {c.isActive && (
+                <Button
+                  variant="secondary"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleDeactivate(c);
+                  }}
+                >
+                  Pasifleştir
+                </Button>
+              )}
+            </Card>
+          </Link>
         ))}
       </div>
     </div>

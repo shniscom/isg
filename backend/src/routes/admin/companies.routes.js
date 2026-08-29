@@ -1,17 +1,31 @@
 const express = require('express');
 const { z } = require('zod');
 const { db } = require('../../db/client');
-const { companies, companyUsers, users } = require('../../db/schema');
-const { eq, and } = require('drizzle-orm');
+const {
+  companies,
+  companyUsers,
+  users,
+  companyRoleAssignments,
+  employees,
+  incidents,
+  companyDocuments,
+  boardMeetings,
+  equipment,
+  penalties,
+} = require('../../db/schema');
+const { eq, and, desc, sql } = require('drizzle-orm');
 const { asyncHandler } = require('../../utils/asyncHandler');
 const { ApiError } = require('../../utils/apiError');
 const { requirePermission } = require('../../middleware/permission');
 const { logAudit } = require('../../utils/audit');
+const { createViewUrl } = require('../../services/storage.service');
+const { computeBoardStatus } = require('../../services/board-meeting.service');
 
 const router = express.Router();
 router.use(requirePermission('firma_yonetme'));
 
 const COMPANY_TYPES = ['ANA_FIRMA', 'ALT_ISVEREN', 'TASERON', 'UCUNCU_SAHIS_HIZMET_VEREN', 'TEDARIKCI', 'DIGER'];
+const DANGER_CLASSES = ['COK_TEHLIKELI', 'TEHLIKELI', 'AZ_TEHLIKELI'];
 
 const companySchema = z.object({
   projectId: z.string().min(1, 'Proje seçilmelidir.'),
@@ -24,6 +38,8 @@ const companySchema = z.object({
   address: z.string().optional().nullable(),
   scopeOfWork: z.string().optional().nullable(),
   responsibleBlockId: z.string().optional().nullable(),
+  requiresBoard: z.boolean().optional(),
+  dangerClass: z.enum(DANGER_CLASSES).optional().nullable(),
 });
 
 const companyUpdateSchema = companySchema.partial().omit({ projectId: true });
@@ -70,7 +86,132 @@ router.get(
       .innerJoin(users, eq(companyUsers.userId, users.id))
       .where(eq(companyUsers.companyId, company.id));
 
-    res.json({ company, representatives: reps });
+    // Firma rolleri + acil durum ekipleri (aynı tablo, roleType ile ayrışır).
+    const roleRows = await db
+      .select({
+        id: companyRoleAssignments.id,
+        roleType: companyRoleAssignments.roleType,
+        source: companyRoleAssignments.source,
+        employeeId: companyRoleAssignments.employeeId,
+        employeeFullName: employees.fullName,
+        outsideFullName: companyRoleAssignments.outsideFullName,
+        outsideCompanyName: companyRoleAssignments.outsideCompanyName,
+        outsideNationalId: companyRoleAssignments.outsideNationalId,
+        outsidePhone: companyRoleAssignments.outsidePhone,
+        certificateNo: companyRoleAssignments.certificateNo,
+        certificateClass: companyRoleAssignments.certificateClass,
+        certificateStartDate: companyRoleAssignments.certificateStartDate,
+        certificateEndDate: companyRoleAssignments.certificateEndDate,
+        notes: companyRoleAssignments.notes,
+        createdAt: companyRoleAssignments.createdAt,
+      })
+      .from(companyRoleAssignments)
+      .leftJoin(employees, eq(companyRoleAssignments.employeeId, employees.id))
+      .where(eq(companyRoleAssignments.companyId, company.id))
+      .orderBy(desc(companyRoleAssignments.createdAt));
+
+    // Kaza/ramak kala: son 10 kayıt + tip bazlı toplam sayı.
+    const incidentRows = await db
+      .select({
+        id: incidents.id,
+        type: incidents.type,
+        eventDateTime: incidents.eventDateTime,
+        employeeFullName: employees.fullName,
+        eventDescription: incidents.eventDescription,
+        reportDaysOff: incidents.reportDaysOff,
+      })
+      .from(incidents)
+      .leftJoin(employees, eq(incidents.employeeId, employees.id))
+      .where(eq(incidents.companyId, company.id))
+      .orderBy(desc(incidents.eventDateTime))
+      .limit(10);
+    const [incidentCounts] = await db
+      .select({
+        kazaCount: sql`count(*) filter (where ${incidents.type} = 'KAZA')`.mapWith(Number),
+        ramakKalaCount: sql`count(*) filter (where ${incidents.type} = 'RAMAK_KALA')`.mapWith(Number),
+      })
+      .from(incidents)
+      .where(eq(incidents.companyId, company.id));
+
+    // Risk analizi + acil durum eylem planı belgeleri.
+    const documentRows = await db
+      .select()
+      .from(companyDocuments)
+      .where(eq(companyDocuments.companyId, company.id))
+      .orderBy(desc(companyDocuments.createdAt));
+    const documentsWithUrl = await Promise.all(
+      documentRows.map(async (d) => ({
+        ...d,
+        fileViewUrl: d.fileObjectKey ? await createViewUrl(d.fileObjectKey).catch(() => null) : null,
+      }))
+    );
+
+    // İSG kurulu toplantıları + dönem bazlı durum hesaplaması.
+    const meetingRows = await db
+      .select()
+      .from(boardMeetings)
+      .where(eq(boardMeetings.companyId, company.id))
+      .orderBy(desc(boardMeetings.meetingDate));
+    const meetingsWithUrl = await Promise.all(
+      meetingRows.map(async (m) => ({
+        ...m,
+        attendanceFormViewUrl: m.attendanceFormFileKey ? await createViewUrl(m.attendanceFormFileKey).catch(() => null) : null,
+      }))
+    );
+    const boardStatus = computeBoardStatus(company.dangerClass, meetingRows);
+
+    // Ekipman sayısı (liste ayrı uç noktadan, ?companyId= ile alınır).
+    const [equipmentCountRow] = await db
+      .select({ count: sql`count(*)`.mapWith(Number) })
+      .from(equipment)
+      .where(eq(equipment.companyId, company.id));
+
+    // MYK mesleki yeterlilik belgesi oranı.
+    const [mykStatsRow] = await db
+      .select({
+        total: sql`count(*)`.mapWith(Number),
+        withCertificate: sql`count(*) filter (where ${employees.mykCertificateNo} is not null and ${employees.mykCertificateNo} <> '')`.mapWith(Number),
+      })
+      .from(employees)
+      .where(and(eq(employees.companyId, company.id), eq(employees.isActive, true)));
+
+    // Ceza istatistikleri (bu firmanın çalışanlarına bağlı cezalar).
+    const penaltyRows = await db
+      .select({
+        id: penalties.id,
+        status: penalties.status,
+        sanctionType: penalties.sanctionType,
+        reason: penalties.reason,
+        requestedAt: penalties.requestedAt,
+        employeeFullName: employees.fullName,
+      })
+      .from(penalties)
+      .innerJoin(employees, eq(penalties.employeeId, employees.id))
+      .where(eq(employees.companyId, company.id))
+      .orderBy(desc(penalties.requestedAt))
+      .limit(10);
+    const [penaltyCounts] = await db
+      .select({
+        pending: sql`count(*) filter (where ${penalties.status} = 'BEKLEMEDE')`.mapWith(Number),
+        approved: sql`count(*) filter (where ${penalties.status} = 'ONAYLANDI')`.mapWith(Number),
+        rejected: sql`count(*) filter (where ${penalties.status} = 'REDDEDILDI')`.mapWith(Number),
+      })
+      .from(penalties)
+      .innerJoin(employees, eq(penalties.employeeId, employees.id))
+      .where(eq(employees.companyId, company.id));
+
+    res.json({
+      company,
+      representatives: reps,
+      roleAssignments: roleRows,
+      incidents: { recent: incidentRows, counts: incidentCounts },
+      documents: documentsWithUrl,
+      boardMeetings: meetingsWithUrl,
+      boardStatus,
+      equipmentCount: equipmentCountRow.count,
+      mykStats: mykStatsRow,
+      penalties: { recent: penaltyRows, counts: penaltyCounts },
+    });
   })
 );
 
