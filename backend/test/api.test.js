@@ -2096,6 +2096,19 @@ test('firma güvenlik genişlemesi: roller, kaza/ramak kala, belgeler, İSG kuru
   const rolesAfterDelete = await api('GET', `/admin/company-roles?companyId=${companyId}`, { token: adminToken });
   assert.equal(rolesAfterDelete.body.roles.length, 2);
 
+  // Firma bünyesinden (source=CALISAN) atanan roller, çalışanın employees.isgRole alanına
+  // otomatik yansımalı (Çalışanlar sekmesindeki "İSG Görevi" rozeti/filtresi için).
+  const empListAfterRoles = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}`, { token: adminToken });
+  const emp1AfterRoles = empListAfterRoles.body.employees.find((e) => e.id === employeeId);
+  assert.equal(emp1AfterRoles.isgRole, 'Destek Personeli, İlkyardımcı');
+
+  // Rol kaldırılınca isgRole yeniden hesaplanmalı (silinen rol listeden düşmeli).
+  const roleDeleteDestek = await api('DELETE', `/admin/company-roles/${roleCreate.body.role.id}`, { token: adminToken });
+  assert.equal(roleDeleteDestek.status, 200);
+  const empListAfterRoleRemoval = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}`, { token: adminToken });
+  const emp1AfterRoleRemoval = empListAfterRoleRemoval.body.employees.find((e) => e.id === employeeId);
+  assert.equal(emp1AfterRoleRemoval.isgRole, 'İlkyardımcı');
+
   // --- Kaza / ramak kala ---
   const incidentCreate = await api('POST', '/admin/incidents', {
     token: adminToken,
@@ -2230,7 +2243,7 @@ test('firma güvenlik genişlemesi: roller, kaza/ramak kala, belgeler, İSG kuru
   // --- Firma detay bundle: her şey tek çağrıda birleşmiş olmalı ---
   const companyDetail = await api('GET', `/admin/companies/${companyId}`, { token: adminToken });
   assert.equal(companyDetail.status, 200);
-  assert.equal(companyDetail.body.roleAssignments.length, 2);
+  assert.equal(companyDetail.body.roleAssignments.length, 1);
   assert.equal(companyDetail.body.incidents.counts.kazaCount, 1);
   assert.equal(companyDetail.body.incidents.counts.ramakKalaCount, 1);
   assert.equal(companyDetail.body.documents.length, 1);

@@ -1,6 +1,6 @@
 const express = require('express');
 const { z } = require('zod');
-const { eq } = require('drizzle-orm');
+const { eq, and } = require('drizzle-orm');
 const { db } = require('../../db/client');
 const { companyRoleAssignments, companies, employees } = require('../../db/schema');
 const { requirePermission } = require('../../middleware/permission');
@@ -25,6 +25,42 @@ const ROLE_TYPES = [
   'ARAMA_KURTARMA',
   'KORUMA',
 ];
+
+// Frontend'deki ROLE_TYPE_LABELS ile birebir aynı olmalı (çalışan kartındaki "İSG Görevi"
+// rozetinde ve çalışan düzenleme formundaki İSG Görevi alanında bu etiketler gösterilir).
+const ROLE_TYPE_LABELS = {
+  ISVEREN: 'İşveren',
+  ISVEREN_VEKILI: 'İşveren Vekili',
+  SANTIYE_SEFI: 'Şantiye Şefi',
+  CALISAN_TEMSILCISI: 'Çalışan Temsilcisi',
+  DESTEK_PERSONELI: 'Destek Personeli',
+  PROJE_MUDURU: 'Proje Müdürü',
+  ISG_UZMANI: 'İSG Uzmanı',
+  ISYERI_HEKIMI: 'İşyeri Hekimi',
+  DIGER_SAGLIK_PERSONELI: 'Diğer Sağlık Personeli',
+  ILKYARDIM: 'İlkyardımcı',
+  ARAMA_KURTARMA: 'Arama-Kurtarma',
+  KORUMA: 'Koruma',
+};
+
+/**
+ * Bir çalışanın employees.isgRole alanını, o çalışana atanmış (source=CALISAN) tüm firma
+ * rollerinden yeniden hesaplar ve günceller. Roller & Ekipler sekmesinden çalışan listesinden
+ * seçilerek bir kişiye rol atandığında/kaldırıldığında, bu rol otomatik olarak Çalışanlar
+ * sekmesindeki "İSG Görevi" rozetine ve filtresine de yansısın diye POST/DELETE sonrası çağrılır.
+ */
+async function syncEmployeeIsgRole(employeeId) {
+  if (!employeeId) return;
+  const assignments = await db
+    .select({ roleType: companyRoleAssignments.roleType })
+    .from(companyRoleAssignments)
+    .where(and(eq(companyRoleAssignments.employeeId, employeeId), eq(companyRoleAssignments.source, 'CALISAN')));
+  const labels = [...new Set(assignments.map((a) => ROLE_TYPE_LABELS[a.roleType] || a.roleType))];
+  await db
+    .update(employees)
+    .set({ isgRole: labels.length > 0 ? labels.join(', ') : null })
+    .where(eq(employees.id, employeeId));
+}
 
 // İşveren ve İşveren Vekili firmanın kendi tüzel/gerçek kişisi olduğu için çalışan listesinde
 // bulunması zorunlu değildir; diğer tüm roller (destek personeli, İSG uzmanı, ilkyardımcı vb.)
@@ -131,6 +167,10 @@ router.post(
       })
       .returning();
 
+    if (created.source === 'CALISAN' && created.employeeId) {
+      await syncEmployeeIsgRole(created.employeeId);
+    }
+
     await logAudit({ userId: req.user.sub, action: 'COMPANY_ROLE_CREATE', entityType: 'company_role_assignment', entityId: created.id, details: data, ipAddress: req.ip });
     res.status(201).json({ role: created });
   })
@@ -141,6 +181,11 @@ router.delete(
   asyncHandler(async (req, res) => {
     const [deleted] = await db.delete(companyRoleAssignments).where(eq(companyRoleAssignments.id, req.params.id)).returning();
     if (!deleted) throw ApiError.notFound('Kayıt bulunamadı.');
+
+    if (deleted.source === 'CALISAN' && deleted.employeeId) {
+      await syncEmployeeIsgRole(deleted.employeeId);
+    }
+
     await logAudit({ userId: req.user.sub, action: 'COMPANY_ROLE_DELETE', entityType: 'company_role_assignment', entityId: deleted.id, ipAddress: req.ip });
     res.json({ success: true });
   })
