@@ -2709,3 +2709,279 @@ test('kritik işlemler admin onayına gider: firma düzenle/sil + proje düzenle
   assert.equal(adminDirectPatch.status, 200);
   assert.equal(adminDirectPatch.body.company.name, 'Admin Direkt Değiştirdi');
 });
+
+test('firma pasifleştir/aktifleştir: PATCH isActive ile geri açılabiliyor, pasif firma /employees/companies listesinde görünmüyor', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Aktivasyon Testi Projesi', code: 'TST-AKTV-001' } });
+  const projectId = proj.body.project.id;
+
+  const companyCreate = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Aktivasyon Test Firması', type: 'TASERON' } });
+  const companyId = companyCreate.body.company.id;
+
+  // Başlangıçta /employees/companies listesinde görünür.
+  const beforeDeactivate = await api('GET', `/employees/companies?projectId=${projectId}`, { token: adminToken });
+  assert.ok(beforeDeactivate.body.companies.some((c) => c.id === companyId));
+
+  // Admin pasifleştirir (kritik işlem ama admin olduğu için anında uygulanır).
+  const deactivate = await api('DELETE', `/admin/companies/${companyId}`, { token: adminToken });
+  assert.equal(deactivate.status, 200);
+  assert.equal(deactivate.body.company.isActive, false);
+
+  // Artık /employees/companies listesinde görünmemeli.
+  const afterDeactivate = await api('GET', `/employees/companies?projectId=${projectId}`, { token: adminToken });
+  assert.ok(!afterDeactivate.body.companies.some((c) => c.id === companyId));
+
+  // Admin firma listesinde (yönetim ekranı) hâlâ görünmeli, isActive=false olarak.
+  const adminList = await api('GET', `/admin/companies?projectId=${projectId}`, { token: adminToken });
+  const listed = adminList.body.companies.find((c) => c.id === companyId);
+  assert.ok(listed);
+  assert.equal(listed.isActive, false);
+
+  // PATCH isActive:true ile yeniden aktifleştirilebilir.
+  const reactivate = await api('PATCH', `/admin/companies/${companyId}`, { token: adminToken, body: { isActive: true } });
+  assert.equal(reactivate.status, 200);
+  assert.equal(reactivate.body.company.isActive, true);
+
+  const afterReactivate = await api('GET', `/employees/companies?projectId=${projectId}`, { token: adminToken });
+  assert.ok(afterReactivate.body.companies.some((c) => c.id === companyId));
+});
+
+test('çalışanlar: aynı firmada ad soyad + TC kimlik no aynı olan çalışan tekrar eklenemiyor (mükerrer kayıt uyarısı)', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Test Şantiyesi 24', code: 'TST-024' } });
+  const projectId = proj.body.project.id;
+
+  const company = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Mükerrer Test Firması', type: 'TASERON' } });
+  const companyId = company.body.company.id;
+
+  const first = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId, fullName: 'Mehmet Yılmaz', nationalId: '22222222220', position: 'Usta' },
+  });
+  assert.equal(first.status, 201);
+
+  // Aynı firmada aynı ad soyad + aynı TC kimlik no ile tekrar eklenmeye çalışılırsa 409 dönmeli.
+  const duplicate = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId, fullName: 'Mehmet Yılmaz', nationalId: '22222222220', position: 'Usta' },
+  });
+  assert.equal(duplicate.status, 409);
+
+  // Aynı ad soyad ama TC kimlik no boş bırakılırsa da (yalnızca ad soyad eşleşmesiyle) engellenmeli.
+  const duplicateNoTc = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId, fullName: 'mehmet yılmaz', position: 'Formen' },
+  });
+  assert.equal(duplicateNoTc.status, 409);
+
+  // Farklı bir TC kimlik no ile aynı isim engellenmemeli (gerçekten farklı biri olabilir).
+  const differentTc = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId, fullName: 'Mehmet Yılmaz', nationalId: '33333333330', position: 'Usta' },
+  });
+  assert.equal(differentTc.status, 201);
+
+  // Farklı bir firmada aynı ad soyad + TC kimlik no engellenmemeli (mükerrer kontrolü firma bazlı).
+  const otherCompany = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Diğer Firma', type: 'TASERON' } });
+  const otherCompanyId = otherCompany.body.company.id;
+  const sameInOtherCompany = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId: otherCompanyId, fullName: 'Mehmet Yılmaz', nationalId: '22222222220', position: 'Usta' },
+  });
+  assert.equal(sameInOtherCompany.status, 201);
+});
+
+test('çalışanlar: çoklu firma çalışan tespiti - aynı TC kimlik no birden fazla firmada görünen çalışanları gruplar', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Test Şantiyesi 25', code: 'TST-025' } });
+  const projectId = proj.body.project.id;
+
+  const companyA = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Çoklu Firma A', type: 'TASERON' } });
+  const companyAId = companyA.body.company.id;
+  const companyB = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Çoklu Firma B', type: 'TASERON' } });
+  const companyBId = companyB.body.company.id;
+  const companyC = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Çoklu Firma C', type: 'TASERON' } });
+  const companyCId = companyC.body.company.id;
+
+  // Aynı kişi (aynı TC) hem A hem B firmasında kayıtlı - bu çift çıkmalı.
+  await api('POST', '/employees', { token: adminToken, body: { projectId, companyId: companyAId, fullName: 'Ayşe Kaya', nationalId: '44444444440', position: 'Usta' } });
+  await api('POST', '/employees', { token: adminToken, body: { projectId, companyId: companyBId, fullName: 'Ayşe Kaya', nationalId: '44444444440', position: 'Formen' } });
+
+  // Yalnızca C firmasında kayıtlı, tekil - çıkmamalı.
+  await api('POST', '/employees', { token: adminToken, body: { projectId, companyId: companyCId, fullName: 'Tek Firma Çalışanı', nationalId: '55555555550', position: 'Usta' } });
+
+  const res = await api('GET', `/employees/duplicates?projectId=${projectId}`, { token: adminToken });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.groups.length, 1);
+  assert.equal(res.body.groups[0].length, 2);
+  assert.deepEqual(
+    res.body.groups[0].map((r) => r.companyName).sort(),
+    ['Çoklu Firma A', 'Çoklu Firma B']
+  );
+  assert.ok(res.body.groups[0].every((r) => r.nationalId === '44444444440'));
+
+  // Firmalardan birinden çalışanı kaldırdıktan sonra artık çift olarak görünmemeli.
+  const toRemove = res.body.groups[0].find((r) => r.companyName === 'Çoklu Firma B');
+  const del = await api('DELETE', `/employees/${toRemove.id}`, { token: adminToken });
+  assert.equal(del.status, 200);
+
+  const after = await api('GET', `/employees/duplicates?projectId=${projectId}`, { token: adminToken });
+  assert.equal(after.body.groups.length, 0);
+});
+
+test('kullanıcılar: roster (çalışan listesi) içinden seçim - aday listesi, bağlantı, mükerrer bağlantı engeli', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Test Şantiyesi 26', code: 'TST-026' } });
+  const projectId = proj.body.project.id;
+  const company = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Roster Test Firması', type: 'TASERON' } });
+  const companyId = company.body.company.id;
+
+  const emp = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId, fullName: 'Roster Çalışanı', nationalId: '66666666660', position: 'Usta' },
+  });
+  const employeeId = emp.body.employee.id;
+
+  // Henüz kimseye bağlı değil - aday listesinde görünmeli.
+  const candidatesBefore = await api('GET', `/admin/users/employee-candidates?projectId=${projectId}`, { token: adminToken });
+  assert.equal(candidatesBefore.status, 200);
+  assert.ok(candidatesBefore.body.employees.some((e) => e.id === employeeId));
+
+  // employeeId verilerek kullanıcı oluşturulursa roster-bazlı sayılır, anında (201) oluşturulur.
+  const userRes = await api('POST', '/admin/users', {
+    token: adminToken,
+    body: { fullName: 'Roster Çalışanı', username: 'roster.calisani', employeeId },
+  });
+  assert.equal(userRes.status, 201);
+  assert.ok(userRes.body.tempPassword);
+  assert.equal(userRes.body.user.employeeId, employeeId);
+
+  // Artık bu çalışan aday listesinde görünmemeli (bir kullanıcıya bağlandı).
+  const candidatesAfter = await api('GET', `/admin/users/employee-candidates?projectId=${projectId}`, { token: adminToken });
+  assert.ok(!candidatesAfter.body.employees.some((e) => e.id === employeeId));
+
+  // Aynı çalışana ikinci bir kullanıcı bağlanmaya çalışılırsa engellenmeli.
+  const secondLink = await api('POST', '/admin/users', {
+    token: adminToken,
+    body: { fullName: 'Roster Çalışanı 2', username: 'roster.calisani2', employeeId },
+  });
+  assert.equal(secondLink.status, 409);
+
+  // employeeId verilmeden (roster dışı) admin doğrudan oluşturursa yine 201 dönmeli ve employeeId null olmalı.
+  const offRoster = await api('POST', '/admin/users', {
+    token: adminToken,
+    body: { fullName: 'Roster Dışı Kullanıcı', username: 'roster.disi' },
+  });
+  assert.equal(offRoster.status, 201);
+  assert.equal(offRoster.body.user.employeeId, null);
+});
+
+test('kullanıcılar: silme yerine arşivleme - EXIT modu (bağlı çalışan da arşive alınır) + açık uygunsuzluk devri', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Test Şantiyesi 27', code: 'TST-027' } });
+  const projectId = proj.body.project.id;
+  const company = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Arşiv Test Firması', type: 'TASERON' } });
+  const companyId = company.body.company.id;
+
+  const emp = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId, fullName: 'Arşivlenecek Çalışan', nationalId: '77777777770', position: 'Usta' },
+  });
+  const employeeId = emp.body.employee.id;
+
+  const targetUser = await api('POST', '/admin/users', {
+    token: adminToken,
+    body: { fullName: 'Arşivlenecek Çalışan', username: 'arsiv.calisani', employeeId },
+  });
+  assert.equal(targetUser.status, 201);
+  const targetUserId = targetUser.body.user.id;
+
+  const otherUser = await api('POST', '/admin/users', {
+    token: adminToken,
+    body: { fullName: 'Devir Alan Kullanıcı', username: 'devir.alan' },
+  });
+  const otherUserId = otherUser.body.user.id;
+
+  const rolesRes = await api('GET', '/admin/roles', { token: adminToken });
+  const roleId = rolesRes.body.roles[0].id;
+  // Uygunsuzluk atanabilmesi için her iki kullanıcı da projeye atanmış olmalı.
+  await api('POST', `/admin/users/${targetUserId}/projects`, { token: adminToken, body: { projectId, roleId } });
+  await api('POST', `/admin/users/${otherUserId}/projects`, { token: adminToken, body: { projectId, roleId } });
+
+  // Açık bir uygunsuzluk, arşivlenecek kullanıcıya atanmış olsun.
+  const nc = await api('POST', '/nonconformities', {
+    token: adminToken,
+    body: {
+      projectId,
+      assignedUserIds: [targetUserId],
+      description: 'Arşiv testi için açık uygunsuzluk kaydı.',
+      dueDate: new Date(Date.now() + 86400000).toISOString(),
+    },
+  });
+  assert.equal(nc.status, 201);
+  const ncId = nc.body.nonconformity.id;
+
+  // archive-check: bağlı çalışan bilgisi ve açık uygunsuzluk uyarısı dönmeli.
+  const check = await api('GET', `/admin/users/${targetUserId}/archive-check`, { token: adminToken });
+  assert.equal(check.status, 200);
+  assert.equal(check.body.linkedEmployee.id, employeeId);
+  assert.ok(check.body.openNonconformities.some((n) => n.id === ncId));
+
+  // EXIT modu + açık uygunsuzluğu devret.
+  const archive = await api('POST', `/admin/users/${targetUserId}/archive`, {
+    token: adminToken,
+    body: { mode: 'EXIT', endDate: '2026-08-31', reassignments: [{ nonconformityId: ncId, newAssigneeUserId: otherUserId }] },
+  });
+  assert.equal(archive.status, 200);
+  assert.equal(archive.body.mode, 'EXIT');
+
+  // Kullanıcı pasif olmalı.
+  const userAfter = await api('GET', `/admin/users/${targetUserId}`, { token: adminToken });
+  assert.equal(userAfter.body.user.isActive, false);
+
+  // Zaten pasif olan kullanıcı tekrar arşivlenmeye çalışılırsa 409 dönmeli.
+  const reArchive = await api('POST', `/admin/users/${targetUserId}/archive`, { token: adminToken, body: { mode: 'ROLE_CHANGE' } });
+  assert.equal(reArchive.status, 409);
+
+  // Bağlı çalışan da arşive alınmış (pasif) olmalı - firma listesindeki arşiv sayısı artmış olmalı.
+  const companiesAfter = await api('GET', `/employees/companies?projectId=${projectId}`, { token: adminToken });
+  const comp = companiesAfter.body.companies.find((c) => c.id === companyId);
+  assert.ok(comp.archivedEmployeeCount >= 1);
+
+  // Uygunsuzluk artık devir alan kullanıcıya atanmış olmalı, arşivlenen kullanıcıya değil.
+  const ncDetail = await api('GET', `/nonconformities/${ncId}`, { token: adminToken });
+  const assigneeIds = ncDetail.body.nonconformity.assignees.map((a) => a.userId);
+  assert.ok(assigneeIds.includes(otherUserId));
+  assert.ok(!assigneeIds.includes(targetUserId));
+});
+
+test('kullanıcılar: silme yerine arşivleme - ROLE_CHANGE modu (yalnızca hesap pasifleşir, çalışan kaydına dokunulmaz) + bağlı olmayan kullanıcıda EXIT engeli', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Test Şantiyesi 28', code: 'TST-028' } });
+  const projectId = proj.body.project.id;
+
+  const roleChangeUser = await api('POST', '/admin/users', {
+    token: adminToken,
+    body: { fullName: 'Görev Değişikliği Kullanıcısı', username: 'gorev.degisikligi' },
+  });
+  const roleChangeUserId = roleChangeUser.body.user.id;
+
+  const rolesRes = await api('GET', '/admin/roles', { token: adminToken });
+  const roleId = rolesRes.body.roles[0].id;
+  await api('POST', `/admin/users/${roleChangeUserId}/projects`, { token: adminToken, body: { projectId, roleId } });
+
+  // Bu kullanıcı bir çalışana bağlı değil - EXIT denemesi 400 vermeli.
+  const exitAttempt = await api('POST', `/admin/users/${roleChangeUserId}/archive`, {
+    token: adminToken,
+    body: { mode: 'EXIT' },
+  });
+  assert.equal(exitAttempt.status, 400);
+
+  // ROLE_CHANGE ile arşivlenebilir.
+  const roleChange = await api('POST', `/admin/users/${roleChangeUserId}/archive`, {
+    token: adminToken,
+    body: { mode: 'ROLE_CHANGE' },
+  });
+  assert.equal(roleChange.status, 200);
+  assert.equal(roleChange.body.mode, 'ROLE_CHANGE');
+
+  const userAfter = await api('GET', `/admin/users/${roleChangeUserId}`, { token: adminToken });
+  assert.equal(userAfter.status, 200);
+  assert.equal(userAfter.body.user.isActive, false);
+  // Proje ataması deaktive edilmiş olmalı.
+  assert.ok(userAfter.body.assignments.every((a) => a.isActive === false));
+});

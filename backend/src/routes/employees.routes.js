@@ -84,7 +84,9 @@ router.get(
     const projectId = resolveProjectId(req, req.query.projectId);
     const companyFilterIds = await resolveCompanyScope(req, projectId, null);
 
-    const conditions = [eq(companies.projectId, projectId)];
+    // Pasif (silinmiş/deaktif) firmalar bu operasyonel listede görünmemeli - yalnızca admin
+    // yönetim ekranı (GET /admin/companies) pasif firmaları da gösterir.
+    const conditions = [eq(companies.projectId, projectId), eq(companies.isActive, true)];
     if (companyFilterIds) {
       if (companyFilterIds.length === 0) return res.json({ companies: [] });
       conditions.push(or(...companyFilterIds.map((id) => eq(companies.id, id))));
@@ -186,6 +188,54 @@ router.get(
       .where(and(...conditions));
 
     res.json(row);
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Çoklu firma çalışan tespiti: aynı projede, aynı TC kimlik numarasıyla birden fazla
+// firmanın (aktif) çalışan listesinde görünen kişileri gruplar halinde döner. Böyle bir
+// durum genelde veri girişi hatası ya da bir çalışanın firma değiştirdiği halde eski
+// kaydının kapatılmadığı anlamına gelir; admin buradan çalışanı ilgili firma(lar)dan
+// kaldırabilir (bkz. DELETE /employees/:id - zaten yalnızca admin çağırabilir).
+// ---------------------------------------------------------------------------
+router.get(
+  '/duplicates',
+  asyncHandler(async (req, res) => {
+    if (!req.user.isSystemAdmin) throw ApiError.forbidden('Bu raporu yalnızca sistem admini görüntüleyebilir.');
+    const projectId = resolveProjectId(req, req.query.projectId);
+
+    const dupNationalIds = await db
+      .select({ nationalId: employees.nationalId })
+      .from(employees)
+      .where(and(eq(employees.projectId, projectId), eq(employees.isActive, true), isNotNull(employees.nationalId), ne(employees.nationalId, '')))
+      .groupBy(employees.nationalId)
+      .having(sql`count(distinct ${employees.companyId}) > 1`);
+
+    if (dupNationalIds.length === 0) return res.json({ groups: [] });
+
+    const nationalIds = dupNationalIds.map((r) => r.nationalId);
+    const rows = await db
+      .select({
+        id: employees.id,
+        fullName: employees.fullName,
+        nationalId: employees.nationalId,
+        companyId: employees.companyId,
+        companyName: companies.name,
+        position: employees.position,
+        startDate: employees.startDate,
+      })
+      .from(employees)
+      .leftJoin(companies, eq(employees.companyId, companies.id))
+      .where(and(eq(employees.projectId, projectId), eq(employees.isActive, true), inArray(employees.nationalId, nationalIds)))
+      .orderBy(asc(employees.nationalId), asc(companies.name));
+
+    const groupMap = new Map();
+    for (const r of rows) {
+      if (!groupMap.has(r.nationalId)) groupMap.set(r.nationalId, []);
+      groupMap.get(r.nationalId).push(r);
+    }
+
+    res.json({ groups: Array.from(groupMap.values()) });
   })
 );
 
@@ -326,6 +376,25 @@ router.post(
     if (!parsed.success) throw ApiError.badRequest('Geçersiz çalışan bilgisi.', parsed.error.flatten());
     const projectId = resolveProjectId(req, parsed.data.projectId);
     const endDate = parsed.data.endDate || null;
+
+    // Aynı firmada ad soyad + (girildiyse) TC kimlik numarası aynı olan aktif bir çalışan
+    // zaten varsa mükerrer kayıt oluşturulmasın, uyarı verilsin.
+    if (parsed.data.companyId) {
+      const dupConditions = [
+        eq(employees.companyId, parsed.data.companyId),
+        eq(employees.isActive, true),
+        ilike(employees.fullName, parsed.data.fullName.trim()),
+      ];
+      if (parsed.data.nationalId) dupConditions.push(eq(employees.nationalId, parsed.data.nationalId));
+      const duplicate = await db.select({ id: employees.id }).from(employees).where(and(...dupConditions)).limit(1);
+      if (duplicate.length > 0) {
+        throw ApiError.conflict(
+          parsed.data.nationalId
+            ? `"${parsed.data.fullName}" (${parsed.data.nationalId}) bu firmada zaten kayıtlı.`
+            : `"${parsed.data.fullName}" adında bir çalışan bu firmada zaten kayıtlı. Farklı bir kişiyse TC kimlik numarasını da girin.`
+        );
+      }
+    }
 
     const [created] = await db
       .insert(employees)

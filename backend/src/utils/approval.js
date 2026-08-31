@@ -15,14 +15,16 @@ const { EXECUTORS } = require('../services/criticalActions.service');
  * @param {object} opts.payload - onaylandığında executor'a aynen geçirilecek veri.
  * @param {string} opts.summary - admin onay ekranında gösterilecek insan-okunur özet.
  * @param {string} [opts.projectId]
+ * @param {number} [opts.successStatus] - admin anında uyguladığında dönecek HTTP durumu (varsayılan 200).
+ *   Bir CREATE işlemi için 201 vermek isteyen route'lar bunu geçebilir.
  */
-async function runOrQueueForApproval(req, res, { actionType, entityType, entityId, payload, summary, projectId }) {
+async function runOrQueueForApproval(req, res, { actionType, entityType, entityId, payload, summary, projectId, successStatus }) {
   const executor = EXECUTORS[actionType];
   if (!executor) throw new Error(`Bilinmeyen kritik işlem tipi: ${actionType}`);
 
   if (req.user.isSystemAdmin) {
     const result = await executor(payload, req.user.sub);
-    res.json(result);
+    res.status(successStatus || 200).json(result);
     return;
   }
 

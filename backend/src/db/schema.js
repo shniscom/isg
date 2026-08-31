@@ -70,6 +70,12 @@ const users = pgTable('users', {
   isSystemAdmin: boolean('is_system_admin').notNull().default(false),
   isActive: boolean('is_active').notNull().default(true),
   mustChangePassword: boolean('must_change_password').notNull().default(true),
+  // Bu sistem kullanıcısının sahadaki hangi çalışan (employees) kaydına karşılık geldiği - opsiyonel.
+  // "Kullanıcılar yalnızca firma çalışanları arasından seçilebilmeli" kuralı için: yeni kullanıcı
+  // eklerken bir çalışan seçilirse buraya bağlanır. Boşsa "roster dışı" bir kullanıcı demektir
+  // (bkz. admin/users.routes.js USER_CREATE_OFF_ROSTER - böyle bir ekleme admin onayı gerektirir).
+  // Bir çalışan yalnızca bir kullanıcıya bağlanabilir (unique).
+  employeeId: text('employee_id').references(() => employees.id, { onDelete: 'set null' }),
   // Görünüm tercihleri: her kullanıcı kendi hesabında saklanır, cihaz değiştirince de korunur.
   // themeKey -> frontend'deki tema kataloğundaki bir anahtar (ör. 'klasik', 'kirmizi'); geçersiz/
   // eski bir anahtar gelirse frontend varsayılana düşer, bu yüzden burada enum kullanılmadı.
@@ -81,6 +87,7 @@ const users = pgTable('users', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex('users_username_idx').on(table.username),
+  uniqueIndex('users_employee_id_idx').on(table.employeeId),
 ]);
 
 const projects = pgTable('projects', {
@@ -654,7 +661,7 @@ const pendingApprovals = pgTable('pending_approvals', {
 ]);
 
 // İlişkiler (relational query API için)
-const usersRelations = relations(users, ({ many }) => ({
+const usersRelations = relations(users, ({ one, many }) => ({
   companyUsers: many(companyUsers),
   userProjects: many(userProjects),
   userPermissions: many(userPermissions),
@@ -664,6 +671,7 @@ const usersRelations = relations(users, ({ many }) => ({
   notifications: many(notifications),
   pushSubscriptions: many(pushSubscriptions),
   invites: many(userInvites),
+  employee: one(employees, { fields: [users.employeeId], references: [employees.id] }),
 }));
 
 const projectsRelations = relations(projects, ({ many }) => ({

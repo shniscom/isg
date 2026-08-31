@@ -14,13 +14,20 @@
 // yaptı" anlamlı kalsın diye) - admin'in ONAY KARARI ayrıca admin/approvals.routes.js
 // tarafından APPROVAL_GRANT/APPROVAL_REJECT audit satırıyla loglanır.
 
+const crypto = require('crypto');
 const { eq, and, ne } = require('drizzle-orm');
 const { db } = require('../db/client');
-const { companies, companyBlocks, projects, nonconformities, penalties } = require('../db/schema');
+const { companies, companyBlocks, projects, nonconformities, penalties, users, employees } = require('../db/schema');
 const { ApiError } = require('../utils/apiError');
 const { logAudit } = require('../utils/audit');
+const { hashPassword } = require('../utils/password');
 const { createNotifications } = require('./notification.service');
 const { loadAssigneeIdsFor } = require('./nonconformity.service');
+
+/** Okunması kolay, yeterince güçlü geçici şifre üretir. Örn: "Isg-7F3kQ2z9" (bkz. admin/users.routes.js). */
+function generateTempPassword() {
+  return `Isg-${crypto.randomBytes(6).toString('base64url')}`;
+}
 
 /** company_blocks tablosunu verilen firma için blockIds listesiyle eşleşecek şekilde senkronize eder. */
 async function syncCompanyBlocks(tx, companyId, blockIds) {
@@ -131,6 +138,53 @@ async function executePenaltyReject({ penaltyId, decisionNote }, actorId) {
   return { penalty: updated };
 }
 
+/**
+ * Yeni kullanıcı oluşturur. employeeId verilmişse (roster'daki bilinen bir çalışan seçildiyse)
+ * bu her zaman GÜVENLİ kabul edilir - admin/users.routes.js böyle bir durumda bu executor'ı
+ * DOĞRUDAN çağırır (onay akışına hiç girmez). employeeId boşsa (roster dışı / projede hiçbir
+ * firmanın çalışan listesinde bulunmayan biri ekleniyorsa) bu KRİTİK sayılır ve route
+ * runOrQueueForApproval üzerinden çağırır - admin ise anında, değilse admin onayına kuyruklanır.
+ */
+async function executeUserCreate({ fullName, username, phone, email, employeeId }, actorId) {
+  const existing = await db.select().from(users).where(eq(users.username, username)).limit(1);
+  if (existing.length > 0) throw ApiError.conflict('Bu kullanıcı adı zaten kullanımda.');
+
+  if (employeeId) {
+    const [employee] = await db.select().from(employees).where(eq(employees.id, employeeId)).limit(1);
+    if (!employee || !employee.isActive) throw ApiError.badRequest('Seçilen çalışan bulunamadı veya artık aktif değil.');
+    const [linked] = await db.select({ id: users.id }).from(users).where(eq(users.employeeId, employeeId)).limit(1);
+    if (linked) throw ApiError.conflict('Bu çalışana zaten bir kullanıcı hesabı bağlı.');
+  }
+
+  const tempPassword = generateTempPassword();
+  const passwordHash = await hashPassword(tempPassword);
+
+  const [created] = await db
+    .insert(users)
+    .values({
+      fullName,
+      username,
+      phone: phone || null,
+      email: email || null,
+      passwordHash,
+      mustChangePassword: true,
+      employeeId: employeeId || null,
+    })
+    .returning();
+
+  await logAudit({
+    userId: actorId,
+    action: 'USER_CREATE',
+    entityType: 'user',
+    entityId: created.id,
+    details: { username: created.username, offRoster: !employeeId },
+    ipAddress: null,
+  });
+
+  const { passwordHash: _omit, ...safeUser } = created;
+  return { user: safeUser, tempPassword };
+}
+
 // actionType -> executor. admin/approvals.routes.js ve utils/approval.js BUNU tek kaynak olarak kullanır.
 const EXECUTORS = {
   COMPANY_UPDATE: executeCompanyUpdate,
@@ -140,6 +194,7 @@ const EXECUTORS = {
   NONCONFORMITY_DELETE: executeNonconformityDelete,
   PENALTY_APPROVE: executePenaltyApprove,
   PENALTY_REJECT: executePenaltyReject,
+  USER_CREATE: executeUserCreate,
 };
 
 module.exports = { EXECUTORS };

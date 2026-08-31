@@ -50,6 +50,9 @@ const companySchema = z.object({
   // Firmanın sorumlu olduğu bölge/blok id'leri. Boş dizi/undefined -> "Tüm Bölgeler" (proje
   // genelinden sorumlu) anlamına gelir. bkz. company_blocks tablosu.
   blockIds: z.array(z.string()).optional(),
+  // Yalnızca güncellemede kullanılır (create'te her zaman true baslar) - firmayı yeniden
+  // aktifleştirmek için. bkz. PATCH /:id ve COMPANY_UPDATE executor.
+  isActive: z.boolean().optional(),
 });
 
 const companyUpdateSchema = companySchema.partial().omit({ projectId: true });
