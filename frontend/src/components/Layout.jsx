@@ -18,6 +18,7 @@ const NAV_ITEMS = [
   { to: '/admin/kategoriler', label: 'Kategoriler', icon: '🏷️', adminOnly: true },
   { to: '/admin/arsiv', label: 'Arşiv', icon: '🗄️', adminOnly: true },
   { to: '/admin/ayarlar', label: 'Ayarlar', icon: '⚙️', adminOnly: true },
+  { to: '/yardim', label: 'Yardım', icon: '❓' },
 ];
 
 function NavItems({ onNavigate }) {

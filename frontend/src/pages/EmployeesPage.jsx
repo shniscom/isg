@@ -29,7 +29,10 @@ function StatusChip({ chip }) {
 }
 
 export function EmployeesPage() {
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
+  // Admin ile aynı şekilde tam yazma yetkisi (ekleme/Excel içe aktarma/arşivleme): sistem admini
+  // ya da İnsan Kaynakları Yönetimi yetkisi olan kişiler - bkz. backend employees.routes.js.
+  const canManageEmployees = user?.isSystemAdmin || hasPermission('insan_kaynaklari_yonetimi');
   const fileInputRef = useRef(null);
 
   const [adminProjects, setAdminProjects] = useState(null);
@@ -87,7 +90,7 @@ export function EmployeesPage() {
   }
 
   function loadDuplicates() {
-    if (!activeProjectId || !user?.isSystemAdmin) return;
+    if (!activeProjectId || !canManageEmployees) return;
     const params = user?.isSystemAdmin ? { projectId: activeProjectId } : {};
     apiClient
       .get('/employees/duplicates', { params })
@@ -293,7 +296,7 @@ export function EmployeesPage() {
           </Select>
         )}
 
-        {user?.isSystemAdmin && duplicateGroups?.length > 0 && (
+        {canManageEmployees && duplicateGroups?.length > 0 && (
           <Card className="space-y-2 border-amber-200 bg-amber-50">
             <button type="button" onClick={() => setShowDuplicates((v) => !v)} className="flex w-full items-center justify-between text-left">
               <span className="text-sm font-semibold text-amber-800">
@@ -420,7 +423,7 @@ export function EmployeesPage() {
         </Select>
       </div>
 
-      {user?.isSystemAdmin && (
+      {canManageEmployees && (
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <Button type="button" variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={importing}>
             {importing ? 'Yükleniyor...' : '📥 Excel ile Liste Yükle'}
@@ -432,7 +435,7 @@ export function EmployeesPage() {
         </div>
       )}
 
-      {user?.isSystemAdmin && (
+      {canManageEmployees && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
           <button type="button" onClick={() => setShowFormatGuide((v) => !v)} className="font-medium text-brand-700 hover:underline">
             {showFormatGuide ? 'Excel formatını gizle ▲' : 'ℹ️ Excel formatı nasıl olmalı? ▼'}
@@ -443,7 +446,7 @@ export function EmployeesPage() {
         </div>
       )}
 
-      {user?.isSystemAdmin && showFormatGuide && (
+      {canManageEmployees && showFormatGuide && (
         <Card className="space-y-2 text-sm">
           <p className="text-slate-600">
             İlk satır <span className="font-medium">başlık</span> kabul edilir ve okunmaz; veriler{' '}
@@ -483,10 +486,18 @@ export function EmployeesPage() {
       {importResult && (
         <Alert variant="success">
           {importResult.created} yeni, {importResult.updated} güncellendi, {importResult.archived} arşivlendi
+          {importResult.rejoined > 0 ? ` (${importResult.rejoined} yeniden giriş)` : ''}
           {importResult.skipped > 0 ? `, ${importResult.skipped} satır atlandı` : ''}.
           {importResult.errors?.length > 0 && (
             <span className="mt-1 block text-xs opacity-80">{importResult.errors.slice(0, 5).join(' ')}</span>
           )}
+        </Alert>
+      )}
+      {importResult?.needsExitDateReview && (
+        <Alert variant="warning">
+          ⚠️ {importResult.archived} çalışan yeni listede yer almadığı için <strong>tarihsiz</strong> olarak arşive
+          alındı. Gerçek çıkış tarihlerini biliyorsanız Çalışanlar &gt; Çıkış Yapanlar / Arşiv sekmesinden ilgili
+          kişiyi açıp girmenizi öneririz.
         </Alert>
       )}
 
@@ -532,7 +543,7 @@ export function EmployeesPage() {
 
       {employees?.length === 0 && <p className="text-sm text-slate-500">Kayıt bulunamadı.</p>}
 
-      {user?.isSystemAdmin && employees?.length > 0 && (
+      {canManageEmployees && employees?.length > 0 && (
         <div className="flex items-center justify-between rounded-xl bg-slate-100 px-3 py-2 text-xs">
           <label className="flex items-center gap-2 font-medium text-slate-600">
             <input type="checkbox" checked={!!allSelected} onChange={toggleSelectAll} />
@@ -558,7 +569,7 @@ export function EmployeesPage() {
           return (
             <div key={emp.id} className="rounded-xl border border-slate-200 bg-surface p-3 transition hover:border-brand-300">
               <div className="flex items-start gap-2">
-                {user?.isSystemAdmin && (
+                {canManageEmployees && (
                   <input
                     type="checkbox"
                     className="mt-1.5 shrink-0"
@@ -585,7 +596,7 @@ export function EmployeesPage() {
                     {emp.isgRole && <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[11px] font-medium text-purple-700">🦺 {emp.isgRole}</span>}
                   </div>
                 </Link>
-                {user?.isSystemAdmin && (
+                {canManageEmployees && (
                   <button
                     type="button"
                     onClick={() => handleDeleteOne(emp)}

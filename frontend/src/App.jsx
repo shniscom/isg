@@ -33,6 +33,7 @@ import { ReportsPage } from './pages/ReportsPage';
 import { PenaltiesPage } from './pages/PenaltiesPage';
 import { EmployeesPage } from './pages/EmployeesPage';
 import { EmployeeDetailPage } from './pages/EmployeeDetailPage';
+import { HelpPage } from './pages/HelpPage';
 
 function PublicOnlyRoute({ children, expectedStatus }) {
   const { status } = useAuth();
@@ -95,6 +96,7 @@ function AppRoutes() {
         <Route path="/cezalar" element={<PenaltiesPage />} />
         <Route path="/calisanlar" element={<EmployeesPage />} />
         <Route path="/calisanlar/:id" element={<EmployeeDetailPage />} />
+        <Route path="/yardim" element={<HelpPage />} />
 
         <Route
           path="/admin/projeler"

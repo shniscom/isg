@@ -146,6 +146,14 @@ export function EmployeeDetailPage() {
   const { employee, nonconformities } = data;
   const trainingChip = trainingStatusChip(employee);
   const medicalChip = medicalExamStatusChip(employee);
+  // Yeniden işe alım: en son çıkış tarihi kayıtlıysa ve mevcut giriş tarihi o çıkıştan sonraysa
+  // (yani aradan bir çıkış geçip yeniden aktif edilmişse) "ilk giriş / çıkış / yeniden giriş"
+  // bilgisini birlikte gösteririz - bkz. backend schema.js employees.lastExitDate yorumu.
+  const isRehire =
+    employee.isActive &&
+    employee.lastExitDate &&
+    employee.startDate &&
+    new Date(employee.startDate) > new Date(employee.lastExitDate);
 
   return (
     <div className="mx-auto max-w-2xl space-y-5">
@@ -169,6 +177,26 @@ export function EmployeeDetailPage() {
           {employee.mykCertificateNo && <span className="rounded-full bg-teal-100 px-2.5 py-1 text-xs font-medium text-teal-700">🎓 MYK: {employee.mykCertificateNo}</span>}
         </div>
 
+        {isRehire && (
+          <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm">
+            <p className="mb-1.5 font-medium text-blue-800">🔄 Yeniden İşe Alım</p>
+            <div className="grid grid-cols-1 gap-x-4 gap-y-1 text-blue-900 sm:grid-cols-3">
+              <div>
+                <span className="block text-xs text-blue-600">İlk Giriş Tarihi</span>
+                {employee.firstStartDate ? formatDate(employee.firstStartDate) : '—'}
+              </div>
+              <div>
+                <span className="block text-xs text-blue-600">Çıkış Tarihi</span>
+                {formatDate(employee.lastExitDate)}
+              </div>
+              <div>
+                <span className="block text-xs text-blue-600">Yeniden Giriş Tarihi</span>
+                {formatDate(employee.startDate)}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 gap-x-4 gap-y-1.5 text-sm text-slate-600 sm:grid-cols-2">
           {employee.nationalId && (
             <div>
@@ -176,7 +204,8 @@ export function EmployeeDetailPage() {
             </div>
           )}
           <div>
-            <span className="text-slate-400">Giriş Tarihi:</span> {employee.startDate ? formatDate(employee.startDate) : '—'}
+            <span className="text-slate-400">{isRehire ? 'Giriş Tarihi (yeniden):' : 'Giriş Tarihi:'}</span>{' '}
+            {employee.startDate ? formatDate(employee.startDate) : '—'}
           </div>
           {employee.endDate && (
             <div>
