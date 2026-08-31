@@ -15,6 +15,7 @@ router.use('/permissions', require('./permissions.routes'));
 router.use('/categories', require('./categories.routes'));
 router.use('/archives', require('./archives.routes'));
 router.use('/company-roles', require('./company-roles.routes'));
+router.use('/company-role-types', require('./company-role-types.routes'));
 router.use('/incidents', require('./incidents.routes'));
 router.use('/company-documents', require('./company-documents.routes'));
 router.use('/board-meetings', require('./board-meetings.routes'));

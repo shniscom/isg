@@ -1,6 +1,6 @@
 const express = require('express');
 const { z } = require('zod');
-const { eq, and, or, desc, gte, lte, ilike, isNull, inArray, count } = require('drizzle-orm');
+const { eq, and, or, desc, gte, lte, ilike, isNull, isNotNull, inArray, count, sql } = require('drizzle-orm');
 const { db } = require('../db/client');
 const {
   nonconformities,
@@ -17,6 +17,7 @@ const {
   roles,
   employees,
   penalties,
+  incidents,
   dueDateExtensions,
   permissions,
   userPermissions,
@@ -188,6 +189,133 @@ router.get(
 
     const result = [...byUser.values()].map(({ _match, ...rest }) => rest);
     res.json({ users: result });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Firma bazlı özet (Uygunsuzluklar sayfasındaki firma kartları için). Kullanıcının genel
+// görme yetkisi (uygunsuzluk_gorme / firma_yonetme / admin) varsa projedeki tüm firmalar
+// kart olarak listelenir; yoksa yalnızca userProjects üzerinden kendisine bir firma
+// kapsamında görev/rol atanmış firmalar listelenir - "kendi sorumlu olduğu firmalar".
+// "Genel" toplamı, GET /nonconformities ile aynı görünürlük kuralına göre hesaplanır (kendi
+// açtığı/atandığı ya da tam görme yetkisi varsa projedeki her şey).
+// ---------------------------------------------------------------------------
+router.get(
+  '/company-summary',
+  asyncHandler(async (req, res) => {
+    const projectId = resolveProjectId(req, req.query.projectId);
+    if (!hasPermission(req, 'uygunsuzluk_acma') && !hasPermission(req, 'uygunsuzluk_gorme')) {
+      throw ApiError.forbidden();
+    }
+
+    const canSeeAll = req.user.isSystemAdmin || hasPermission(req, 'uygunsuzluk_gorme') || hasPermission(req, 'firma_yonetme');
+
+    let companyRows;
+    if (canSeeAll) {
+      companyRows = await db
+        .select({ id: companies.id, name: companies.name })
+        .from(companies)
+        .where(and(eq(companies.projectId, projectId), eq(companies.isActive, true)));
+    } else {
+      const myCompanyAssignments = await db
+        .selectDistinct({ companyId: userProjects.companyId })
+        .from(userProjects)
+        .where(
+          and(
+            eq(userProjects.userId, req.user.sub),
+            eq(userProjects.projectId, projectId),
+            eq(userProjects.isActive, true),
+            isNotNull(userProjects.companyId)
+          )
+        );
+      const myCompanyIds = myCompanyAssignments.map((r) => r.companyId);
+      companyRows =
+        myCompanyIds.length > 0
+          ? await db
+              .select({ id: companies.id, name: companies.name })
+              .from(companies)
+              .where(and(inArray(companies.id, myCompanyIds), eq(companies.isActive, true)))
+          : [];
+    }
+
+    const companyIds = companyRows.map((c) => c.id);
+
+    // Uygunsuzluk sayıları: GET /nonconformities ile birebir aynı görünürlük kısıtı uygulanır.
+    const ncConditions = [eq(nonconformities.projectId, projectId)];
+    if (!canSeeAll) {
+      const myAssignments = await db
+        .select({ nonconformityId: nonconformityAssignees.nonconformityId })
+        .from(nonconformityAssignees)
+        .where(eq(nonconformityAssignees.userId, req.user.sub));
+      const myAssignedIds = myAssignments.map((a) => a.nonconformityId);
+      ncConditions.push(
+        myAssignedIds.length > 0
+          ? or(inArray(nonconformities.id, myAssignedIds), eq(nonconformities.openedById, req.user.sub))
+          : eq(nonconformities.openedById, req.user.sub)
+      );
+    }
+
+    const ncRows = await db
+      .select({ companyId: nonconformities.companyId, status: nonconformities.status, count: sql`count(*)`.mapWith(Number) })
+      .from(nonconformities)
+      .where(and(...ncConditions))
+      .groupBy(nonconformities.companyId, nonconformities.status);
+
+    const incidentRows =
+      companyIds.length > 0
+        ? await db
+            .select({
+              companyId: incidents.companyId,
+              kazaCount: sql`count(*) filter (where ${incidents.type} = 'KAZA')`.mapWith(Number),
+              ramakKalaCount: sql`count(*) filter (where ${incidents.type} = 'RAMAK_KALA')`.mapWith(Number),
+            })
+            .from(incidents)
+            .where(inArray(incidents.companyId, companyIds))
+            .groupBy(incidents.companyId)
+        : [];
+
+    const penaltyRows =
+      companyIds.length > 0
+        ? await db
+            .select({ companyId: employees.companyId, count: sql`count(*)`.mapWith(Number) })
+            .from(penalties)
+            .innerJoin(employees, eq(penalties.employeeId, employees.id))
+            .where(inArray(employees.companyId, companyIds))
+            .groupBy(employees.companyId)
+        : [];
+
+    const emptyCounts = () => ({ ACIK: 0, BEKLEMEDE: 0, KAPALI: 0, total: 0 });
+
+    const byCompany = new Map();
+    for (const c of companyRows) {
+      byCompany.set(c.id, { companyId: c.id, companyName: c.name, counts: emptyCounts(), kazaCount: 0, ramakKalaCount: 0, penaltyCount: 0 });
+    }
+    const overall = { counts: emptyCounts(), kazaCount: 0, ramakKalaCount: 0, penaltyCount: 0 };
+
+    for (const row of ncRows) {
+      overall.counts[row.status] = (overall.counts[row.status] || 0) + row.count;
+      overall.counts.total += row.count;
+      if (row.companyId && byCompany.has(row.companyId)) {
+        const entry = byCompany.get(row.companyId);
+        entry.counts[row.status] = (entry.counts[row.status] || 0) + row.count;
+        entry.counts.total += row.count;
+      }
+    }
+    for (const row of incidentRows) {
+      overall.kazaCount += row.kazaCount;
+      overall.ramakKalaCount += row.ramakKalaCount;
+      if (byCompany.has(row.companyId)) {
+        const entry = byCompany.get(row.companyId);
+        entry.kazaCount = row.kazaCount;
+        entry.ramakKalaCount = row.ramakKalaCount;
+      }
+    }
+    for (const row of penaltyRows) {
+      overall.penaltyCount += row.count;
+      if (byCompany.has(row.companyId)) byCompany.get(row.companyId).penaltyCount = row.count;
+    }
+
+    res.json({ overall, companies: [...byCompany.values()] });
   })
 );
 

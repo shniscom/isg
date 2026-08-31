@@ -1,47 +1,23 @@
 const express = require('express');
 const { z } = require('zod');
-const { eq, and } = require('drizzle-orm');
+const { eq, and, inArray } = require('drizzle-orm');
 const { db } = require('../../db/client');
-const { companyRoleAssignments, companies, employees } = require('../../db/schema');
+const { companyRoleAssignments, companyRoleTypes, companies, employees } = require('../../db/schema');
 const { requirePermission } = require('../../middleware/permission');
 const { asyncHandler } = require('../../utils/asyncHandler');
 const { ApiError } = require('../../utils/apiError');
 const { logAudit } = require('../../utils/audit');
 
 const router = express.Router();
-router.use(requirePermission('firma_yonetme'));
 
-const ROLE_TYPES = [
-  'ISVEREN',
-  'ISVEREN_VEKILI',
-  'SANTIYE_SEFI',
-  'CALISAN_TEMSILCISI',
-  'DESTEK_PERSONELI',
-  'PROJE_MUDURU',
-  'ISG_UZMANI',
-  'ISYERI_HEKIMI',
-  'DIGER_SAGLIK_PERSONELI',
-  'ILKYARDIM',
-  'ARAMA_KURTARMA',
-  'KORUMA',
-];
+const VIEW_PERMISSIONS = ['firma_yonetme', 'firma_goruntuleme'];
 
-// Frontend'deki ROLE_TYPE_LABELS ile birebir aynı olmalı (çalışan kartındaki "İSG Görevi"
-// rozetinde ve çalışan düzenleme formundaki İSG Görevi alanında bu etiketler gösterilir).
-const ROLE_TYPE_LABELS = {
-  ISVEREN: 'İşveren',
-  ISVEREN_VEKILI: 'İşveren Vekili',
-  SANTIYE_SEFI: 'Şantiye Şefi',
-  CALISAN_TEMSILCISI: 'Çalışan Temsilcisi',
-  DESTEK_PERSONELI: 'Destek Personeli',
-  PROJE_MUDURU: 'Proje Müdürü',
-  ISG_UZMANI: 'İSG Uzmanı',
-  ISYERI_HEKIMI: 'İşyeri Hekimi',
-  DIGER_SAGLIK_PERSONELI: 'Diğer Sağlık Personeli',
-  ILKYARDIM: 'İlkyardımcı',
-  ARAMA_KURTARMA: 'Arama-Kurtarma',
-  KORUMA: 'Koruma',
-};
+// Firma rolü tipleri artık sabit bir liste değil, admin tarafından "Görevler" sayfasından
+// yönetilen company_role_types tablosudur (bkz. company-role-types.routes.js). İşveren ve
+// İşveren Vekili firmanın kendi tüzel/gerçek kişisi olduğu için çalışan listesinde bulunması
+// zorunlu değildir; bu iki anahtar özel olarak sabit tutuldu çünkü iş kuralı bu spesifik
+// rollere bağlı (yeni eklenen özel roller için varsayılan olarak çalışan seçimi zorunludur).
+const EMPLOYEE_NOT_REQUIRED_ROLE_KEYS = new Set(['ISVEREN', 'ISVEREN_VEKILI']);
 
 /**
  * Bir çalışanın employees.isgRole alanını, o çalışana atanmış (source=CALISAN) tüm firma
@@ -55,23 +31,21 @@ async function syncEmployeeIsgRole(employeeId) {
     .select({ roleType: companyRoleAssignments.roleType })
     .from(companyRoleAssignments)
     .where(and(eq(companyRoleAssignments.employeeId, employeeId), eq(companyRoleAssignments.source, 'CALISAN')));
-  const labels = [...new Set(assignments.map((a) => ROLE_TYPE_LABELS[a.roleType] || a.roleType))];
-  await db
-    .update(employees)
-    .set({ isgRole: labels.length > 0 ? labels.join(', ') : null })
-    .where(eq(employees.id, employeeId));
+  if (assignments.length === 0) {
+    await db.update(employees).set({ isgRole: null }).where(eq(employees.id, employeeId));
+    return;
+  }
+  const keys = [...new Set(assignments.map((a) => a.roleType))];
+  const typeRows = await db.select({ key: companyRoleTypes.key, label: companyRoleTypes.label }).from(companyRoleTypes).where(inArray(companyRoleTypes.key, keys));
+  const labelByKey = new Map(typeRows.map((t) => [t.key, t.label]));
+  const labels = keys.map((k) => labelByKey.get(k) || k);
+  await db.update(employees).set({ isgRole: labels.join(', ') }).where(eq(employees.id, employeeId));
 }
-
-// İşveren ve İşveren Vekili firmanın kendi tüzel/gerçek kişisi olduğu için çalışan listesinde
-// bulunması zorunlu değildir; diğer tüm roller (destek personeli, İSG uzmanı, ilkyardımcı vb.)
-// firma bünyesindeyse çalışan listesinden seçilmelidir (source=CALISAN). Dışarıdan (OSGB vb.)
-// hizmet alınıyorsa source=DISARIDAN ile serbest metin bilgileri girilir.
-const EMPLOYEE_NOT_REQUIRED_ROLES = new Set(['ISVEREN', 'ISVEREN_VEKILI']);
 
 const createSchema = z
   .object({
     companyId: z.string().min(1),
-    roleType: z.enum(ROLE_TYPES),
+    roleType: z.string().min(1, 'Rol seçilmelidir.'),
     source: z.enum(['CALISAN', 'DISARIDAN']).default('CALISAN'),
     employeeId: z.string().optional().nullable(),
     outsideFullName: z.string().optional().nullable(),
@@ -85,7 +59,7 @@ const createSchema = z
     notes: z.string().optional().nullable(),
   })
   .superRefine((data, ctx) => {
-    if (data.source === 'CALISAN' && !data.employeeId && !EMPLOYEE_NOT_REQUIRED_ROLES.has(data.roleType)) {
+    if (data.source === 'CALISAN' && !data.employeeId && !EMPLOYEE_NOT_REQUIRED_ROLE_KEYS.has(data.roleType)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Bu rol için çalışan listesinden bir kişi seçilmelidir.', path: ['employeeId'] });
     }
     if (data.source === 'DISARIDAN' && !data.outsideFullName) {
@@ -101,6 +75,7 @@ function toDateOrNull(value) {
 
 router.get(
   '/',
+  requirePermission(VIEW_PERMISSIONS),
   asyncHandler(async (req, res) => {
     const { companyId } = req.query;
     if (!companyId) throw ApiError.badRequest('companyId zorunludur.');
@@ -132,6 +107,7 @@ router.get(
 
 router.post(
   '/',
+  requirePermission('firma_yonetme'),
   asyncHandler(async (req, res) => {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz rol bilgisi.', parsed.error.flatten());
@@ -139,6 +115,9 @@ router.post(
 
     const [company] = await db.select().from(companies).where(eq(companies.id, data.companyId)).limit(1);
     if (!company) throw ApiError.notFound('Firma bulunamadı.');
+
+    const [roleTypeRow] = await db.select().from(companyRoleTypes).where(eq(companyRoleTypes.key, data.roleType)).limit(1);
+    if (!roleTypeRow) throw ApiError.badRequest('Geçersiz rol tipi.');
 
     if (data.source === 'CALISAN' && data.employeeId) {
       const [employee] = await db.select().from(employees).where(eq(employees.id, data.employeeId)).limit(1);
@@ -178,6 +157,7 @@ router.post(
 
 router.delete(
   '/:id',
+  requirePermission('firma_yonetme'),
   asyncHandler(async (req, res) => {
     const [deleted] = await db.delete(companyRoleAssignments).where(eq(companyRoleAssignments.id, req.params.id)).returning();
     if (!deleted) throw ApiError.notFound('Kayıt bulunamadı.');

@@ -92,6 +92,13 @@
       "when": 1788010602904,
       "tag": "0012_user_appearance_prefs",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1788179208343,
+      "tag": "0013_bolge_ve_firma_rolu_genisletme",
+      "breakpoints": true
     }
   ]
 }

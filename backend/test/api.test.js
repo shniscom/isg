@@ -57,6 +57,7 @@ test.before(async () => {
     { key: 'proje_yonetme', name: 'Proje Yönetme' },
     { key: 'kullanici_yonetme', name: 'Kullanıcı Yönetme' },
     { key: 'firma_yonetme', name: 'Firma Yönetme' },
+    { key: 'firma_goruntuleme', name: 'Firmaları Görüntüleme' },
     { key: 'kaza_bildirimi', name: 'Kaza / Ramak Kala Bildirimi Girme' },
   ]);
 
@@ -2402,4 +2403,201 @@ test('görünüm tercihleri: varsayılan değerler, PATCH ile güncelleme, geçe
   // Başka bir kullanıcının görünüm tercihini etkilemez (tamamen kişisel).
   const adminMe = await api('GET', '/auth/me', { token: adminToken });
   assert.equal(adminMe.body.user.themeKey, 'klasik');
+});
+
+test('firma çoklu bölge (company_blocks): oluşturma, güncelleme, liste özetine yansıması', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Çoklu Bölge Projesi', code: 'TST-BOLGE-001' } });
+  const projectId = proj.body.project.id;
+
+  const blockA = await api('POST', `/admin/projects/${projectId}/blocks`, { token: adminToken, body: { name: 'A Bölgesi' } });
+  const blockB = await api('POST', `/admin/projects/${projectId}/blocks`, { token: adminToken, body: { name: 'B Bölgesi' } });
+  const blockAId = blockA.body.block.id;
+  const blockBId = blockB.body.block.id;
+
+  // Firma oluştururken birden fazla bölge seçilebilmeli (Örnek 3: firma birden fazla bölgeden sorumlu).
+  const companyCreate = await api('POST', '/admin/companies', {
+    token: adminToken,
+    body: { projectId, name: 'Çoklu Bölge Firması', type: 'TASERON', blockIds: [blockAId, blockBId] },
+  });
+  assert.equal(companyCreate.status, 201);
+  const companyId = companyCreate.body.company.id;
+
+  const detail = await api('GET', `/admin/companies/${companyId}`, { token: adminToken });
+  assert.equal(detail.status, 200);
+  const detailBlockNames = detail.body.blocks.map((b) => b.name).sort();
+  assert.deepEqual(detailBlockNames, ['A Bölgesi', 'B Bölgesi']);
+
+  const list = await api('GET', `/admin/companies?projectId=${projectId}`, { token: adminToken });
+  const listedCompany = list.body.companies.find((c) => c.id === companyId);
+  assert.equal(listedCompany.summary.blocks.length, 2);
+
+  // PATCH ile bölge listesi tek bölgeye indirgenebilmeli (Örnek 1: tek bölgeden sorumlu firma).
+  const patch = await api('PATCH', `/admin/companies/${companyId}`, { token: adminToken, body: { blockIds: [blockAId] } });
+  assert.equal(patch.status, 200);
+  const detailAfterPatch = await api('GET', `/admin/companies/${companyId}`, { token: adminToken });
+  assert.deepEqual(detailAfterPatch.body.blocks.map((b) => b.name), ['A Bölgesi']);
+
+  // PATCH ile boş dizi gönderilirse firma "Tüm Bölgeler"e döner (Örnek 2: genel sorumluluk).
+  const patchClear = await api('PATCH', `/admin/companies/${companyId}`, { token: adminToken, body: { blockIds: [] } });
+  assert.equal(patchClear.status, 200);
+  const detailAfterClear = await api('GET', `/admin/companies/${companyId}`, { token: adminToken });
+  assert.equal(detailAfterClear.body.blocks.length, 0);
+});
+
+test('firma_goruntuleme yetkisi: yalnızca görüntüleme yapabilir, ekleme/düzenleme/silme engellidir', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Görüntüleme Yetkisi Projesi', code: 'TST-GORFIRMA-001' } });
+  const projectId = proj.body.project.id;
+  const companyCreate = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Görüntüleme Test Firması', type: 'TASERON' } });
+  const companyId = companyCreate.body.company.id;
+
+  const rolesRes = await api('GET', '/admin/roles', { token: adminToken });
+  const formenRoleId = rolesRes.body.roles.find((r) => r.name === 'Formen').id;
+  const permsRes = await api('GET', '/admin/permissions', { token: adminToken });
+  const permId = (key) => permsRes.body.permissions.find((p) => p.key === key).id;
+
+  const viewer = await api('POST', '/admin/users', { token: adminToken, body: { fullName: 'Firma Görüntüleyici', username: 'firma.goruntuleyici' } });
+  const viewerId = viewer.body.user.id;
+  await api('POST', `/admin/users/${viewerId}/projects`, { token: adminToken, body: { projectId, roleId: formenRoleId } });
+  await api('POST', `/admin/users/${viewerId}/permissions`, { token: adminToken, body: { permissionId: permId('firma_goruntuleme'), projectId } });
+
+  const login = await api('POST', '/auth/login', { body: { username: 'firma.goruntuleyici', password: viewer.body.tempPassword } });
+  const select = await api('POST', '/auth/select-context', { body: { contextToken: login.body.contextToken, projectId, roleId: formenRoleId } });
+  const viewerToken = select.body.accessToken;
+
+  // Görüntüleme (GET liste + detay) izinli.
+  const list = await api('GET', `/admin/companies?projectId=${projectId}`, { token: viewerToken });
+  assert.equal(list.status, 200);
+  const detail = await api('GET', `/admin/companies/${companyId}`, { token: viewerToken });
+  assert.equal(detail.status, 200);
+
+  // Ekleme/düzenleme/silme (firma_yonetme gerektirir) engelli.
+  const createAttempt = await api('POST', '/admin/companies', { token: viewerToken, body: { projectId, name: 'İzinsiz Firma' } });
+  assert.equal(createAttempt.status, 403);
+  const patchAttempt = await api('PATCH', `/admin/companies/${companyId}`, { token: viewerToken, body: { name: 'Değişti' } });
+  assert.equal(patchAttempt.status, 403);
+  const deleteAttempt = await api('DELETE', `/admin/companies/${companyId}`, { token: viewerToken });
+  assert.equal(deleteAttempt.status, 403);
+
+  // Yetkisi hiç olmayan biri için liste/detay de engelli olmalı.
+  const noPermUser = await api('POST', '/admin/users', { token: adminToken, body: { fullName: 'Yetkisiz Kullanıcı', username: 'yetkisiz.kullanici.firma' } });
+  await api('POST', `/admin/users/${noPermUser.body.user.id}/projects`, { token: adminToken, body: { projectId, roleId: formenRoleId } });
+  const noPermLogin = await api('POST', '/auth/login', { body: { username: 'yetkisiz.kullanici.firma', password: noPermUser.body.tempPassword } });
+  const noPermSelect = await api('POST', '/auth/select-context', { body: { contextToken: noPermLogin.body.contextToken, projectId, roleId: formenRoleId } });
+  const noPermList = await api('GET', `/admin/companies?projectId=${projectId}`, { token: noPermSelect.body.accessToken });
+  assert.equal(noPermList.status, 403);
+});
+
+test('firma rolü tipleri (company-role-types): varsayılan katalog, yeni tip ekleme, kullanımdaysa silme engeli', async () => {
+  const list = await api('GET', '/admin/company-role-types', { token: adminToken });
+  assert.equal(list.status, 200);
+  assert.equal(list.body.roleTypes.length, 12);
+  assert.ok(list.body.roleTypes.some((r) => r.key === 'ISG_UZMANI' && r.category === 'FIRMA_ROLU'));
+  assert.ok(list.body.roleTypes.some((r) => r.key === 'ILKYARDIM' && r.category === 'ACIL_EKIP'));
+
+  // Yetkisiz (kullanici_yonetme olmadan) erişim engelli.
+  const forbidden = await api('POST', '/admin/company-role-types', { body: { key: 'VINC_OPERATORU', label: 'Vinç Operatörü' } });
+  assert.equal(forbidden.status, 401);
+
+  // Yeni bir firma rolü tipi eklenebilmeli - "Görevler" sayfasındaki Firma Rolleri bölümü.
+  const create = await api('POST', '/admin/company-role-types', {
+    token: adminToken,
+    body: { key: 'VINC_OPERATORU', label: 'Vinç Operatörü', category: 'FIRMA_ROLU' },
+  });
+  assert.equal(create.status, 201);
+  const roleTypeId = create.body.roleType.id;
+
+  // Mükerrer anahtar reddedilmeli.
+  const duplicate = await api('POST', '/admin/company-role-types', { token: adminToken, body: { key: 'VINC_OPERATORU', label: 'Tekrar' } });
+  assert.equal(duplicate.status, 409);
+
+  // Yeni eklenen rol, firma rolü atama uç noktasında kullanılabilmeli.
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Yeni Rol Projesi', code: 'TST-YENIROL-001' } });
+  const projectId = proj.body.project.id;
+  const companyCreate = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Yeni Rol Firması' } });
+  const companyId = companyCreate.body.company.id;
+  const assignRole = await api('POST', '/admin/company-roles', {
+    token: adminToken,
+    body: { companyId, roleType: 'VINC_OPERATORU', source: 'DISARIDAN', outsideFullName: 'Dış Vinç Operatörü' },
+  });
+  assert.equal(assignRole.status, 201);
+
+  // Kullanımda olan bir rol tipi silinemez.
+  const deleteInUse = await api('DELETE', `/admin/company-role-types/${roleTypeId}`, { token: adminToken });
+  assert.equal(deleteInUse.status, 409);
+
+  // Atama kaldırılınca rol tipi silinebilmeli.
+  await api('DELETE', `/admin/company-roles/${assignRole.body.role.id}`, { token: adminToken });
+  const deleteAfterRemoval = await api('DELETE', `/admin/company-role-types/${roleTypeId}`, { token: adminToken });
+  assert.equal(deleteAfterRemoval.status, 200);
+
+  // Bilinmeyen bir rol tipiyle firma rolü atanmaya çalışılırsa reddedilmeli.
+  const invalidRoleType = await api('POST', '/admin/company-roles', {
+    token: adminToken,
+    body: { companyId, roleType: 'OLMAYAN_ROL', source: 'DISARIDAN', outsideFullName: 'Test' },
+  });
+  assert.equal(invalidRoleType.status, 400);
+});
+
+test('uygunsuzluk firma-özet (company-summary): admin tüm firmaları, kapsamı sınırlı kullanıcı yalnızca kendi firmasını görür', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Firma Özet Projesi', code: 'TST-OZET-001' } });
+  const projectId = proj.body.project.id;
+
+  const companyX = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Özet Firması X' } });
+  const companyXId = companyX.body.company.id;
+  const companyY = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Özet Firması Y' } });
+  const companyYId = companyY.body.company.id;
+
+  const rolesRes = await api('GET', '/admin/roles', { token: adminToken });
+  const formenRoleId = rolesRes.body.roles.find((r) => r.name === 'Formen').id;
+  const permsRes = await api('GET', '/admin/permissions', { token: adminToken });
+  const permId = (key) => permsRes.body.permissions.find((p) => p.key === key).id;
+
+  // Yalnızca X firmasına atanmış, genel görme yetkisi olmayan bir kullanıcı.
+  const scopedUser = await api('POST', '/admin/users', { token: adminToken, body: { fullName: 'Kapsamlı Kullanıcı', username: 'kapsamli.kullanici.ozet' } });
+  const scopedUserId = scopedUser.body.user.id;
+  await api('POST', `/admin/users/${scopedUserId}/projects`, { token: adminToken, body: { projectId, roleId: formenRoleId, companyId: companyXId } });
+  await api('POST', `/admin/users/${scopedUserId}/permissions`, { token: adminToken, body: { permissionId: permId('uygunsuzluk_acma'), projectId } });
+
+  const login = await api('POST', '/auth/login', { body: { username: 'kapsamli.kullanici.ozet', password: scopedUser.body.tempPassword } });
+  const select = await api('POST', '/auth/select-context', { body: { contextToken: login.body.contextToken, projectId, roleId: formenRoleId } });
+  const scopedToken = select.body.accessToken;
+
+  // Uygunsuzluğu açan kişi kendisini sorumlu olarak atayamadığı için (kendine atama engeli),
+  // başka bir kullanıcı sorumlu olarak atanır.
+  const assigneeUser = await api('POST', '/admin/users', { token: adminToken, body: { fullName: 'Özet Atanan Kişi', username: 'ozet.atanan.kisi' } });
+  const assigneeUserId = assigneeUser.body.user.id;
+  await api('POST', `/admin/users/${assigneeUserId}/projects`, { token: adminToken, body: { projectId, roleId: formenRoleId } });
+
+  // X firması için 2 uygunsuzluk açar (kendi açtığı için görünür), Y firması için admin açar.
+  const dueDate = new Date(Date.now() + 5 * 86400000).toISOString();
+  const ncX1 = await api('POST', '/nonconformities', {
+    token: scopedToken,
+    body: { companyId: companyXId, assignedUserIds: [assigneeUserId], description: 'X firması uygunsuzluk 1', dueDate },
+  });
+  assert.equal(ncX1.status, 201);
+  const ncX2 = await api('POST', '/nonconformities', {
+    token: scopedToken,
+    body: { companyId: companyXId, assignedUserIds: [assigneeUserId], description: 'X firması uygunsuzluk 2', dueDate },
+  });
+  assert.equal(ncX2.status, 201);
+  await api('POST', '/nonconformities', {
+    token: adminToken,
+    body: { projectId, companyId: companyYId, assignedUserIds: [scopedUserId], description: 'Y firması uygunsuzluk (adminin açtığı)', dueDate },
+  });
+
+  // Kapsamlı kullanıcı: yalnızca X firması kart olarak görünmeli (Y'ye atanmış olsa bile firma
+  // bazında sorumlu değil - kendi açtığı/atandığı kayıtlar yine de "Genel" toplamına dahil olur).
+  const scopedSummary = await api('GET', `/nonconformities/company-summary?projectId=${projectId}`, { token: scopedToken });
+  assert.equal(scopedSummary.status, 200);
+  assert.equal(scopedSummary.body.companies.length, 1);
+  assert.equal(scopedSummary.body.companies[0].companyId, companyXId);
+  assert.equal(scopedSummary.body.companies[0].counts.ACIK, 2);
+  // Genel toplam, kendisine Y firmasında atanan kaydı da içermeli (toplamda 3).
+  assert.equal(scopedSummary.body.overall.counts.ACIK, 3);
+
+  // Admin (tam görme yetkisi): hem X hem Y firması kart olarak görünmeli.
+  const adminSummary = await api('GET', `/nonconformities/company-summary?projectId=${projectId}`, { token: adminToken });
+  const adminCompanyIds = adminSummary.body.companies.map((c) => c.companyId).sort();
+  assert.deepEqual(adminCompanyIds, [companyXId, companyYId].sort());
+  assert.equal(adminSummary.body.overall.counts.ACIK, 3);
 });

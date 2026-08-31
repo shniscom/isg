@@ -5,6 +5,8 @@ const {
   companies,
   companyUsers,
   users,
+  companyBlocks,
+  projectBlocks,
   companyRoleAssignments,
   employees,
   incidents,
@@ -13,7 +15,7 @@ const {
   equipment,
   penalties,
 } = require('../../db/schema');
-const { eq, and, desc, sql } = require('drizzle-orm');
+const { eq, and, desc, sql, inArray } = require('drizzle-orm');
 const { asyncHandler } = require('../../utils/asyncHandler');
 const { ApiError } = require('../../utils/apiError');
 const { requirePermission } = require('../../middleware/permission');
@@ -22,7 +24,12 @@ const { createViewUrl } = require('../../services/storage.service');
 const { computeBoardStatus } = require('../../services/board-meeting.service');
 
 const router = express.Router();
-router.use(requirePermission('firma_yonetme'));
+
+// Görüntüleme (liste + detay) 'firma_yonetme' VEYA 'firma_goruntuleme' ile mümkündür; firma
+// kaydı oluşturma/düzenleme/silme ve alt kaynakların (roller vb.) değiştirilmesi hâlâ yalnızca
+// 'firma_yonetme' gerektirir - bu yüzden router genelinde tek bir requirePermission yerine,
+// yazma rotalarının her birine ayrı ayrı 'firma_yonetme' eklenir.
+const VIEW_PERMISSIONS = ['firma_yonetme', 'firma_goruntuleme'];
 
 const COMPANY_TYPES = ['ANA_FIRMA', 'ALT_ISVEREN', 'TASERON', 'UCUNCU_SAHIS_HIZMET_VEREN', 'TEDARIKCI', 'DIGER'];
 const DANGER_CLASSES = ['COK_TEHLIKELI', 'TEHLIKELI', 'AZ_TEHLIKELI'];
@@ -37,31 +44,118 @@ const companySchema = z.object({
   email: z.string().email().optional().nullable().or(z.literal('')),
   address: z.string().optional().nullable(),
   scopeOfWork: z.string().optional().nullable(),
-  responsibleBlockId: z.string().optional().nullable(),
   requiresBoard: z.boolean().optional(),
   dangerClass: z.enum(DANGER_CLASSES).optional().nullable(),
+  // Firmanın sorumlu olduğu bölge/blok id'leri. Boş dizi/undefined -> "Tüm Bölgeler" (proje
+  // genelinden sorumlu) anlamına gelir. bkz. company_blocks tablosu.
+  blockIds: z.array(z.string()).optional(),
 });
 
 const companyUpdateSchema = companySchema.partial().omit({ projectId: true });
 
+/** Verilen firma id listesi için: bölgeler, çalışan/ekipman/rol sayıları, kaza/ramak kala sayılarını toplu olarak getirir. */
+async function loadCompanySummaries(companyIds) {
+  if (companyIds.length === 0) {
+    return new Map();
+  }
+
+  const [blockRows, employeeCounts, equipmentCounts, incidentCounts, roleCounts] = await Promise.all([
+    db
+      .select({ companyId: companyBlocks.companyId, blockId: companyBlocks.blockId, blockName: projectBlocks.name })
+      .from(companyBlocks)
+      .innerJoin(projectBlocks, eq(companyBlocks.blockId, projectBlocks.id))
+      .where(inArray(companyBlocks.companyId, companyIds)),
+    db
+      .select({ companyId: employees.companyId, count: sql`count(*)`.mapWith(Number) })
+      .from(employees)
+      .where(and(inArray(employees.companyId, companyIds), eq(employees.isActive, true)))
+      .groupBy(employees.companyId),
+    db
+      .select({ companyId: equipment.companyId, count: sql`count(*)`.mapWith(Number) })
+      .from(equipment)
+      .where(inArray(equipment.companyId, companyIds))
+      .groupBy(equipment.companyId),
+    db
+      .select({
+        companyId: incidents.companyId,
+        kazaCount: sql`count(*) filter (where ${incidents.type} = 'KAZA')`.mapWith(Number),
+        ramakKalaCount: sql`count(*) filter (where ${incidents.type} = 'RAMAK_KALA')`.mapWith(Number),
+      })
+      .from(incidents)
+      .where(inArray(incidents.companyId, companyIds))
+      .groupBy(incidents.companyId),
+    db
+      .select({ companyId: companyRoleAssignments.companyId, count: sql`count(*)`.mapWith(Number) })
+      .from(companyRoleAssignments)
+      .where(inArray(companyRoleAssignments.companyId, companyIds))
+      .groupBy(companyRoleAssignments.companyId),
+  ]);
+
+  const summaries = new Map();
+  for (const id of companyIds) {
+    summaries.set(id, { blocks: [], employeeCount: 0, equipmentCount: 0, kazaCount: 0, ramakKalaCount: 0, roleAssignmentCount: 0 });
+  }
+  for (const row of blockRows) {
+    summaries.get(row.companyId)?.blocks.push({ id: row.blockId, name: row.blockName });
+  }
+  for (const row of employeeCounts) {
+    if (summaries.has(row.companyId)) summaries.get(row.companyId).employeeCount = row.count;
+  }
+  for (const row of equipmentCounts) {
+    if (summaries.has(row.companyId)) summaries.get(row.companyId).equipmentCount = row.count;
+  }
+  for (const row of incidentCounts) {
+    const s = summaries.get(row.companyId);
+    if (s) {
+      s.kazaCount = row.kazaCount;
+      s.ramakKalaCount = row.ramakKalaCount;
+    }
+  }
+  for (const row of roleCounts) {
+    if (summaries.has(row.companyId)) summaries.get(row.companyId).roleAssignmentCount = row.count;
+  }
+  return summaries;
+}
+
+/** company_blocks tablosunu verilen firma için blockIds listesiyle eşleşecek şekilde senkronize eder. */
+async function syncCompanyBlocks(tx, companyId, blockIds) {
+  await tx.delete(companyBlocks).where(eq(companyBlocks.companyId, companyId));
+  if (blockIds && blockIds.length > 0) {
+    await tx.insert(companyBlocks).values([...new Set(blockIds)].map((blockId) => ({ companyId, blockId })));
+  }
+}
+
 router.get(
   '/',
+  requirePermission(VIEW_PERMISSIONS),
   asyncHandler(async (req, res) => {
     const { projectId } = req.query;
     const rows = projectId
       ? await db.select().from(companies).where(eq(companies.projectId, projectId))
       : await db.select().from(companies);
-    res.json({ companies: rows });
+
+    const summaries = await loadCompanySummaries(rows.map((c) => c.id));
+    const companiesWithSummary = rows.map((c) => ({ ...c, summary: summaries.get(c.id) }));
+
+    res.json({ companies: companiesWithSummary });
   })
 );
 
 router.post(
   '/',
+  requirePermission('firma_yonetme'),
   asyncHandler(async (req, res) => {
     const parsed = companySchema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz firma bilgisi.', parsed.error.flatten());
 
-    const [created] = await db.insert(companies).values(parsed.data).returning();
+    const { blockIds, ...companyData } = parsed.data;
+
+    const created = await db.transaction(async (tx) => {
+      const [row] = await tx.insert(companies).values(companyData).returning();
+      await syncCompanyBlocks(tx, row.id, blockIds);
+      return row;
+    });
+
     await logAudit({ userId: req.user.sub, action: 'COMPANY_CREATE', entityType: 'company', entityId: created.id, details: parsed.data, ipAddress: req.ip });
     res.status(201).json({ company: created });
   })
@@ -69,6 +163,7 @@ router.post(
 
 router.get(
   '/:id',
+  requirePermission(VIEW_PERMISSIONS),
   asyncHandler(async (req, res) => {
     const [company] = await db.select().from(companies).where(eq(companies.id, req.params.id)).limit(1);
     if (!company) throw ApiError.notFound('Firma bulunamadı.');
@@ -200,8 +295,16 @@ router.get(
       .innerJoin(employees, eq(penalties.employeeId, employees.id))
       .where(eq(employees.companyId, company.id));
 
+    // Bu firmanın sorumlu olduğu bölgeler (boşsa "Tüm Bölgeler" anlamına gelir).
+    const blockRows = await db
+      .select({ id: projectBlocks.id, name: projectBlocks.name })
+      .from(companyBlocks)
+      .innerJoin(projectBlocks, eq(companyBlocks.blockId, projectBlocks.id))
+      .where(eq(companyBlocks.companyId, company.id));
+
     res.json({
       company,
+      blocks: blockRows,
       representatives: reps,
       roleAssignments: roleRows,
       incidents: { recent: incidentRows, counts: incidentCounts },
@@ -217,15 +320,30 @@ router.get(
 
 router.patch(
   '/:id',
+  requirePermission('firma_yonetme'),
   asyncHandler(async (req, res) => {
     const parsed = companyUpdateSchema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz firma bilgisi.', parsed.error.flatten());
 
-    const [updated] = await db
-      .update(companies)
-      .set({ ...parsed.data, updatedAt: new Date() })
-      .where(eq(companies.id, req.params.id))
-      .returning();
+    const { blockIds, ...companyData } = parsed.data;
+
+    const updated = await db.transaction(async (tx) => {
+      let row;
+      if (Object.keys(companyData).length > 0) {
+        [row] = await tx
+          .update(companies)
+          .set({ ...companyData, updatedAt: new Date() })
+          .where(eq(companies.id, req.params.id))
+          .returning();
+      } else {
+        [row] = await tx.select().from(companies).where(eq(companies.id, req.params.id)).limit(1);
+      }
+      if (!row) return null;
+      if (blockIds !== undefined) {
+        await syncCompanyBlocks(tx, row.id, blockIds);
+      }
+      return row;
+    });
     if (!updated) throw ApiError.notFound('Firma bulunamadı.');
 
     await logAudit({ userId: req.user.sub, action: 'COMPANY_UPDATE', entityType: 'company', entityId: updated.id, details: parsed.data, ipAddress: req.ip });
@@ -236,6 +354,7 @@ router.patch(
 // Firmalar kalıcı silinmez; pasif duruma alınır (soft delete).
 router.delete(
   '/:id',
+  requirePermission('firma_yonetme'),
   asyncHandler(async (req, res) => {
     const [updated] = await db
       .update(companies)
@@ -256,6 +375,7 @@ const addRepSchema = z.object({
 
 router.post(
   '/:id/users',
+  requirePermission('firma_yonetme'),
   asyncHandler(async (req, res) => {
     const parsed = addRepSchema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz istek.', parsed.error.flatten());
@@ -282,6 +402,7 @@ router.post(
 
 router.delete(
   '/:id/users/:companyUserId',
+  requirePermission('firma_yonetme'),
   asyncHandler(async (req, res) => {
     const [deleted] = await db
       .delete(companyUsers)

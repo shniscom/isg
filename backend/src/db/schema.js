@@ -47,20 +47,9 @@ const penaltySanctionEnum = pgEnum('penalty_sanction', ['PARA_CEZASI', 'UYARI', 
 const penaltyStatusEnum = pgEnum('penalty_status', ['BEKLEMEDE', 'ONAYLANDI', 'REDDEDILDI']);
 const extensionStatusEnum = pgEnum('extension_status', ['BEKLEMEDE', 'ONAYLANDI', 'REDDEDILDI']);
 const archiveStatusEnum = pgEnum('archive_status', ['OLUSTURULDU', 'SILINDI']);
-const companyRoleTypeEnum = pgEnum('company_role_type', [
-  'ISVEREN',
-  'ISVEREN_VEKILI',
-  'SANTIYE_SEFI',
-  'CALISAN_TEMSILCISI',
-  'DESTEK_PERSONELI',
-  'PROJE_MUDURU',
-  'ISG_UZMANI',
-  'ISYERI_HEKIMI',
-  'DIGER_SAGLIK_PERSONELI',
-  'ILKYARDIM',
-  'ARAMA_KURTARMA',
-  'KORUMA',
-]);
+// NOT: Firma rolü tipleri (İşveren, Şantiye Şefi, İSG Uzmanı vb.) eskiden sabit bir Postgres
+// enum'uydu (company_role_type). Artık admin tarafından "Görevler" sayfasından yönetilebilen
+// dinamik bir tablo (company_role_types) haline getirildi; bkz. aşağıdaki companyRoleTypes.
 const companyRoleSourceEnum = pgEnum('company_role_source', ['CALISAN', 'DISARIDAN']);
 const incidentTypeEnum = pgEnum('incident_type', ['KAZA', 'RAMAK_KALA']);
 const companyDocTypeEnum = pgEnum('company_doc_type', ['RISK_ANALIZI', 'ACIL_DURUM_EYLEM_PLANI']);
@@ -145,6 +134,23 @@ const companyUsers = pgTable('company_users', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex('company_users_company_user_idx').on(table.companyId, table.userId),
+]);
+
+/**
+ * Bir firmanın hangi bölge(ler)den/blok(lar)dan sorumlu olduğunu belirtir (çoktan çoğa).
+ * Örn. "A Firması" hem "A Bölgesi" hem "B Bölgesi"nden sorumlu olabilir. Bir firmanın hiç
+ * satırı yoksa (boş) projenin tamamından sorumlu kabul edilir - "Tüm Bölgeler" anlamına gelir.
+ * Eski tekil companies.responsibleBlockId alanı artık kullanılmıyor (geriye dönük uyumluluk
+ * için silinmedi), tüm yeni kod bu tabloyu kullanır.
+ */
+const companyBlocks = pgTable('company_blocks', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  companyId: text('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
+  blockId: text('block_id').notNull().references(() => projectBlocks.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('company_blocks_unique_idx').on(table.companyId, table.blockId),
+  index('company_blocks_block_idx').on(table.blockId),
 ]);
 
 const roles = pgTable('roles', {
@@ -454,10 +460,28 @@ const archivesRelations = relations(archives, ({ one }) => ({
  * ayrı bir satırdır. Sertifika alanları role göre kullanılır (ör. İSG Uzmanı için
  * certificateClass = "B Sınıfı", İlkyardım için certificateStartDate/EndDate).
  */
+/**
+ * Firma rolü tipi kataloğu (İşveren, Şantiye Şefi, İSG Uzmanı, İlkyardımcı vb.). Admin
+ * "Görevler" sayfasından (Firma Rolleri bölümü) yeni tip ekleyebilir/silebilir; buradaki
+ * her satır companyRoleAssignments.roleType tarafından "key" üzerinden referans alınır.
+ * category: 'FIRMA_ROLU' (Roller & Ekipler sekmesindeki "Firma Rolleri" grubu) veya
+ * 'ACIL_EKIP' ("Acil Durum Ekipleri" grubu).
+ */
+const companyRoleTypes = pgTable('company_role_types', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  key: text('key').notNull(),
+  label: text('label').notNull(),
+  category: text('category').notNull().default('FIRMA_ROLU'),
+  sortOrder: integer('sort_order').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('company_role_types_key_idx').on(table.key),
+]);
+
 const companyRoleAssignments = pgTable('company_role_assignments', {
   id: text('id').primaryKey().$defaultFn(genId),
   companyId: text('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
-  roleType: companyRoleTypeEnum('role_type').notNull(),
+  roleType: text('role_type').notNull().references(() => companyRoleTypes.key),
   source: companyRoleSourceEnum('source').notNull().default('CALISAN'),
   employeeId: text('employee_id').references(() => employees.id, { onDelete: 'set null' }),
   outsideFullName: text('outside_full_name'),
@@ -631,11 +655,21 @@ const companiesRelations = relations(companies, ({ one, many }) => ({
   companyUsers: many(companyUsers),
   userProjects: many(userProjects),
   employees: many(employees),
+  companyBlocks: many(companyBlocks),
 }));
 
 const companyUsersRelations = relations(companyUsers, ({ one }) => ({
   company: one(companies, { fields: [companyUsers.companyId], references: [companies.id] }),
   user: one(users, { fields: [companyUsers.userId], references: [users.id] }),
+}));
+
+const companyBlocksRelations = relations(companyBlocks, ({ one }) => ({
+  company: one(companies, { fields: [companyBlocks.companyId], references: [companies.id] }),
+  block: one(projectBlocks, { fields: [companyBlocks.blockId], references: [projectBlocks.id] }),
+}));
+
+const companyRoleTypesRelations = relations(companyRoleTypes, ({ many }) => ({
+  assignments: many(companyRoleAssignments),
 }));
 
 const rolesRelations = relations(roles, ({ many }) => ({
@@ -750,7 +784,6 @@ module.exports = {
   penaltyStatusEnum,
   extensionStatusEnum,
   archiveStatusEnum,
-  companyRoleTypeEnum,
   companyRoleSourceEnum,
   incidentTypeEnum,
   companyDocTypeEnum,
@@ -781,6 +814,8 @@ module.exports = {
   systemSettings,
   userInvites,
   archives,
+  companyBlocks,
+  companyRoleTypes,
   companyRoleAssignments,
   incidents,
   companyDocuments,
@@ -792,6 +827,8 @@ module.exports = {
   projectBlocksRelations,
   companiesRelations,
   companyUsersRelations,
+  companyBlocksRelations,
+  companyRoleTypesRelations,
   rolesRelations,
   permissionsRelations,
   userProjectsRelations,

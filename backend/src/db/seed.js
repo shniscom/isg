@@ -1,7 +1,7 @@
 require('dotenv').config();
 const bcrypt = require('bcryptjs');
 const { db, pool } = require('./client');
-const { roles, permissions, users } = require('./schema');
+const { roles, permissions, users, companyRoleTypes } = require('./schema');
 const { eq } = require('drizzle-orm');
 
 const DEFAULT_ROLES = [
@@ -33,8 +33,28 @@ const DEFAULT_PERMISSIONS = [
   { key: 'rapor_alma', name: 'Rapor Alma (Excel/PDF)' },
   { key: 'kullanici_yonetme', name: 'Kullanıcı Yönetme' },
   { key: 'firma_yonetme', name: 'Firma Yönetme' },
+  { key: 'firma_goruntuleme', name: 'Firmaları Görüntüleme', description: 'Firma bilgilerini/kartlarını görüntüleyebilir ama ekleyip/düzenleyemez.' },
   { key: 'proje_yonetme', name: 'Proje Yönetme' },
   { key: 'kaza_bildirimi', name: 'Kaza / Ramak Kala Bildirimi Girme' },
+];
+
+// Firma rolü tipi kataloğu (company_role_types). Migration 0013 bu satırları FK constraint
+// eklenmeden ÖNCE zaten ekliyor (deploy sırasındaki eski verilerle FK çakışmaması için); burada
+// tekrar onConflictDoNothing ile eklenmesi yalnızca migration dışı/temiz kurulum senaryoları için
+// bir güvenlik ağıdır, normal deploy akışında hiçbir satır eklemez (zaten var).
+const DEFAULT_COMPANY_ROLE_TYPES = [
+  { key: 'ISVEREN', label: 'İşveren', category: 'FIRMA_ROLU', sortOrder: 1 },
+  { key: 'ISVEREN_VEKILI', label: 'İşveren Vekili', category: 'FIRMA_ROLU', sortOrder: 2 },
+  { key: 'SANTIYE_SEFI', label: 'Şantiye Şefi', category: 'FIRMA_ROLU', sortOrder: 3 },
+  { key: 'CALISAN_TEMSILCISI', label: 'Çalışan Temsilcisi', category: 'FIRMA_ROLU', sortOrder: 4 },
+  { key: 'DESTEK_PERSONELI', label: 'Destek Personeli', category: 'FIRMA_ROLU', sortOrder: 5 },
+  { key: 'PROJE_MUDURU', label: 'Proje Müdürü', category: 'FIRMA_ROLU', sortOrder: 6 },
+  { key: 'ISG_UZMANI', label: 'İSG Uzmanı', category: 'FIRMA_ROLU', sortOrder: 7 },
+  { key: 'ISYERI_HEKIMI', label: 'İşyeri Hekimi', category: 'FIRMA_ROLU', sortOrder: 8 },
+  { key: 'DIGER_SAGLIK_PERSONELI', label: 'Diğer Sağlık Personeli', category: 'FIRMA_ROLU', sortOrder: 9 },
+  { key: 'ILKYARDIM', label: 'İlkyardımcı', category: 'ACIL_EKIP', sortOrder: 1 },
+  { key: 'ARAMA_KURTARMA', label: 'Arama-Kurtarma', category: 'ACIL_EKIP', sortOrder: 2 },
+  { key: 'KORUMA', label: 'Koruma', category: 'ACIL_EKIP', sortOrder: 3 },
 ];
 
 async function seed() {
@@ -46,6 +66,11 @@ async function seed() {
   console.log('İzinler ekleniyor...');
   for (const perm of DEFAULT_PERMISSIONS) {
     await db.insert(permissions).values(perm).onConflictDoNothing({ target: permissions.key });
+  }
+
+  console.log('Firma rolü tipleri kontrol ediliyor...');
+  for (const roleType of DEFAULT_COMPANY_ROLE_TYPES) {
+    await db.insert(companyRoleTypes).values(roleType).onConflictDoNothing({ target: companyRoleTypes.key });
   }
 
   const adminUsername = process.env.SEED_ADMIN_USERNAME || 'admin';
