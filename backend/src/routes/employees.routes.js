@@ -8,6 +8,7 @@ const { requireSystemAdmin, requirePermission } = require('../middleware/permiss
 const { asyncHandler } = require('../utils/asyncHandler');
 const { ApiError } = require('../utils/apiError');
 const { logAudit } = require('../utils/audit');
+const { runOrQueueForApproval } = require('../utils/approval');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -57,7 +58,7 @@ async function resolveCompanyScope(req, projectId, requestedCompanyId) {
   let companyFilterIds = null;
   // İnsan Kaynakları Yönetimi yetkisi olanlar, uygunsuzluk_gorme yetkisi olanlarla aynı şekilde
   // projedeki TÜM firmaların çalışan listesini görebilmeli (işleri zaten bu - bkz. Kullanım Kılavuzu).
-  if (!req.user.isSystemAdmin && !hasPermission(req, 'uygunsuzluk_gorme') && !hasPermission(req, 'insan_kaynaklari_yonetimi')) {
+  if (!req.user.isSystemAdmin && !hasPermission(req, 'uygunsuzluk_gorme') && !hasPermission(req, 'insan_kaynaklari_yonetimi') && !hasPermission(req, 'gecici_gorevlendirme_yonetimi')) {
     const scoped = await getScopedCompanyIds(req.user.sub, projectId);
     if (scoped.length > 0) {
       companyFilterIds = scoped;
@@ -370,16 +371,42 @@ const createSchema = z.object({
   mykCertificateDate: z.string().optional().nullable().or(z.literal('')),
   startDate: z.string().optional().nullable().or(z.literal('')),
   endDate: z.string().optional().nullable().or(z.literal('')),
+  // Geçici görevlendirme alanları - yalnızca hedef firma companies.isTemporaryAssignment=true
+  // ise anlamlıdır, ama şema düzeyinde her zaman kabul edilir (bkz. schema.js employees tablosu).
+  assignmentFormExists: z.boolean().optional(),
+  sgkEntryDocExists: z.boolean().optional(),
+  orientationTrainingDate: z.string().optional().nullable().or(z.literal('')),
+  ppeHandoverDocExists: z.boolean().optional(),
 });
 
 router.post(
   '/',
   asyncHandler(async (req, res) => {
-    if (!hasPermission(req, 'uygunsuzluk_acma') && !hasPermission(req, 'insan_kaynaklari_yonetimi')) throw ApiError.forbidden();
+    if (
+      !hasPermission(req, 'uygunsuzluk_acma') &&
+      !hasPermission(req, 'insan_kaynaklari_yonetimi') &&
+      !hasPermission(req, 'gecici_gorevlendirme_yonetimi')
+    ) {
+      throw ApiError.forbidden();
+    }
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz çalışan bilgisi.', parsed.error.flatten());
     const projectId = resolveProjectId(req, parsed.data.projectId);
     const endDate = parsed.data.endDate || null;
+
+    // Hedef firma geçici görevlendirme firması mı? Yalnızca 'gecici_gorevlendirme_yonetimi'
+    // yetkisine sahip (ve 'uygunsuzluk_acma'/'insan_kaynaklari_yonetimi' OLMAYAN) kullanıcılar
+    // yalnızca bu tür firmalara çalışan ekleyebilir; ayrıca bu tür ekleme admin dışındaki
+    // kullanıcılar için admin onayına gider (bkz. TEMP_EMPLOYEE_CREATE executor).
+    let targetCompany = null;
+    if (parsed.data.companyId) {
+      [targetCompany] = await db.select().from(companies).where(eq(companies.id, parsed.data.companyId)).limit(1);
+    }
+    const isTemp = !!targetCompany?.isTemporaryAssignment;
+    const canManageAllEmployees = hasPermission(req, 'uygunsuzluk_acma') || hasPermission(req, 'insan_kaynaklari_yonetimi');
+    if (!isTemp && !canManageAllEmployees) {
+      throw ApiError.forbidden('Yalnızca geçici görevlendirme firmalarına çalışan ekleme yetkiniz var.');
+    }
 
     // Aynı firmada ad soyad + (girildiyse) TC kimlik numarası aynı olan aktif bir çalışan
     // zaten varsa mükerrer kayıt oluşturulmasın, uyarı verilsin.
@@ -400,32 +427,48 @@ router.post(
       }
     }
 
-    const [created] = await db
-      .insert(employees)
-      .values({
+    const employeeData = {
+      projectId,
+      companyId: parsed.data.companyId || null,
+      fullName: parsed.data.fullName,
+      nationalId: parsed.data.nationalId || null,
+      position: parsed.data.position || null,
+      isgTrainingDate: toDateOrNull(parsed.data.isgTrainingDate),
+      isgTrainingExpiryDate: toDateOrNull(parsed.data.isgTrainingExpiryDate),
+      medicalExamDate: toDateOrNull(parsed.data.medicalExamDate),
+      startWorkTrainingNote: parsed.data.startWorkTrainingNote || null,
+      ek2Note: parsed.data.ek2Note || null,
+      healthAuthoritySignatureNote: parsed.data.healthAuthoritySignatureNote || null,
+      isgRole: parsed.data.isgRole || null,
+      mykCertificateNo: parsed.data.mykCertificateNo || null,
+      mykCertificateDate: toDateOrNull(parsed.data.mykCertificateDate),
+      startDate: toDateOrNull(parsed.data.startDate),
+      endDate: toDateOrNull(endDate),
+      isActive: !endDate,
+      // İlk kayıt: "ilk giriş tarihi" burada bir kere sabitlenir. Zaten çıkışlı (endDate dolu)
+      // olarak ekleniyorsa (nadir - genelde geçmiş kayıt girişi) en son çıkış tarihi de aynı anda set edilir.
+      firstStartDate: toDateOrNull(parsed.data.startDate),
+      lastExitDate: endDate ? toDateOrNull(endDate) : null,
+      assignmentFormExists: parsed.data.assignmentFormExists ?? false,
+      sgkEntryDocExists: parsed.data.sgkEntryDocExists ?? false,
+      orientationTrainingDate: toDateOrNull(parsed.data.orientationTrainingDate),
+      ppeHandoverDocExists: parsed.data.ppeHandoverDocExists ?? false,
+    };
+
+    if (isTemp) {
+      await runOrQueueForApproval(req, res, {
+        actionType: 'TEMP_EMPLOYEE_CREATE',
+        entityType: 'employee',
+        entityId: targetCompany.id,
+        payload: { employeeData },
+        summary: `"${employeeData.fullName}", "${targetCompany.name}" geçici görevlendirme firmasına çalışan olarak eklenecek.`,
         projectId,
-        companyId: parsed.data.companyId || null,
-        fullName: parsed.data.fullName,
-        nationalId: parsed.data.nationalId || null,
-        position: parsed.data.position || null,
-        isgTrainingDate: toDateOrNull(parsed.data.isgTrainingDate),
-        isgTrainingExpiryDate: toDateOrNull(parsed.data.isgTrainingExpiryDate),
-        medicalExamDate: toDateOrNull(parsed.data.medicalExamDate),
-        startWorkTrainingNote: parsed.data.startWorkTrainingNote || null,
-        ek2Note: parsed.data.ek2Note || null,
-        healthAuthoritySignatureNote: parsed.data.healthAuthoritySignatureNote || null,
-        isgRole: parsed.data.isgRole || null,
-        mykCertificateNo: parsed.data.mykCertificateNo || null,
-        mykCertificateDate: toDateOrNull(parsed.data.mykCertificateDate),
-        startDate: toDateOrNull(parsed.data.startDate),
-        endDate: toDateOrNull(endDate),
-        isActive: !endDate,
-        // İlk kayıt: "ilk giriş tarihi" burada bir kere sabitlenir. Zaten çıkışlı (endDate dolu)
-        // olarak ekleniyorsa (nadir - genelde geçmiş kayıt girişi) en son çıkış tarihi de aynı anda set edilir.
-        firstStartDate: toDateOrNull(parsed.data.startDate),
-        lastExitDate: endDate ? toDateOrNull(endDate) : null,
-      })
-      .returning();
+        successStatus: 201,
+      });
+      return;
+    }
+
+    const [created] = await db.insert(employees).values(employeeData).returning();
 
     await logAudit({
       userId: req.user.sub,
@@ -460,22 +503,50 @@ const updateSchema = z.object({
   mykCertificateDate: z.string().optional().nullable().or(z.literal('')),
   startDate: z.string().optional().nullable().or(z.literal('')),
   endDate: z.string().optional().nullable().or(z.literal('')),
+  assignmentFormExists: z.boolean().optional(),
+  sgkEntryDocExists: z.boolean().optional(),
+  orientationTrainingDate: z.string().optional().nullable().or(z.literal('')),
+  ppeHandoverDocExists: z.boolean().optional(),
 });
 
 router.patch(
   '/:id',
   asyncHandler(async (req, res) => {
-    if (!hasPermission(req, 'uygunsuzluk_acma') && !hasPermission(req, 'insan_kaynaklari_yonetimi')) throw ApiError.forbidden();
+    if (
+      !hasPermission(req, 'uygunsuzluk_acma') &&
+      !hasPermission(req, 'insan_kaynaklari_yonetimi') &&
+      !hasPermission(req, 'gecici_gorevlendirme_yonetimi')
+    ) {
+      throw ApiError.forbidden();
+    }
     const [employee] = await db.select().from(employees).where(eq(employees.id, req.params.id)).limit(1);
     if (!employee) throw ApiError.notFound('Çalışan bulunamadı.');
 
-    if (!req.user.isSystemAdmin && !hasPermission(req, 'uygunsuzluk_gorme')) {
+    if (
+      !req.user.isSystemAdmin &&
+      !hasPermission(req, 'uygunsuzluk_gorme') &&
+      !hasPermission(req, 'insan_kaynaklari_yonetimi') &&
+      !hasPermission(req, 'gecici_gorevlendirme_yonetimi')
+    ) {
       const scoped = await getScopedCompanyIds(req.user.sub, employee.projectId);
       if (!scoped.includes(employee.companyId)) throw ApiError.forbidden();
     }
 
     const parsed = updateSchema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz çalışan bilgisi.', parsed.error.flatten());
+
+    // Hedef firma (companyId değiştiriliyorsa yeni firma, değilse mevcut firma) geçici
+    // görevlendirme firması mı? bkz. POST / rotasındaki aynı mantık.
+    const effectiveCompanyId = parsed.data.companyId !== undefined ? parsed.data.companyId : employee.companyId;
+    let targetCompany = null;
+    if (effectiveCompanyId) {
+      [targetCompany] = await db.select().from(companies).where(eq(companies.id, effectiveCompanyId)).limit(1);
+    }
+    const isTemp = !!targetCompany?.isTemporaryAssignment;
+    const canManageAllEmployees = hasPermission(req, 'uygunsuzluk_acma') || hasPermission(req, 'insan_kaynaklari_yonetimi');
+    if (!isTemp && !canManageAllEmployees) {
+      throw ApiError.forbidden('Yalnızca geçici görevlendirme firmalarındaki çalışanları düzenleme yetkiniz var.');
+    }
 
     const values = {};
     if (parsed.data.companyId !== undefined) values.companyId = parsed.data.companyId || null;
@@ -492,6 +563,10 @@ router.patch(
     if (parsed.data.mykCertificateNo !== undefined) values.mykCertificateNo = parsed.data.mykCertificateNo || null;
     if (parsed.data.mykCertificateDate !== undefined) values.mykCertificateDate = toDateOrNull(parsed.data.mykCertificateDate);
     if (parsed.data.startDate !== undefined) values.startDate = toDateOrNull(parsed.data.startDate);
+    if (parsed.data.assignmentFormExists !== undefined) values.assignmentFormExists = parsed.data.assignmentFormExists;
+    if (parsed.data.sgkEntryDocExists !== undefined) values.sgkEntryDocExists = parsed.data.sgkEntryDocExists;
+    if (parsed.data.orientationTrainingDate !== undefined) values.orientationTrainingDate = toDateOrNull(parsed.data.orientationTrainingDate);
+    if (parsed.data.ppeHandoverDocExists !== undefined) values.ppeHandoverDocExists = parsed.data.ppeHandoverDocExists;
     if (parsed.data.endDate !== undefined) {
       const endDateRaw = parsed.data.endDate || null;
       // Çıkış tarihi girilirse çalışan otomatik arşive alınır; temizlenirse yeniden aktif olur.
@@ -512,6 +587,21 @@ router.patch(
     if (!employee.firstStartDate) {
       const effectiveStartDate = values.startDate !== undefined ? values.startDate : employee.startDate;
       if (effectiveStartDate) values.firstStartDate = effectiveStartDate;
+    }
+
+    // Geçici görevlendirme firmasına bağlı bir çalışandaki değişiklik admin dışındaki
+    // kullanıcılar için admin onayına gider (bkz. TEMP_EMPLOYEE_UPDATE executor); normal
+    // firmalardaki çalışan güncellemeleri mevcut davranış gereği anında uygulanır.
+    if (isTemp) {
+      await runOrQueueForApproval(req, res, {
+        actionType: 'TEMP_EMPLOYEE_UPDATE',
+        entityType: 'employee',
+        entityId: employee.id,
+        payload: { employeeId: employee.id, values },
+        summary: `"${employee.fullName}" (${targetCompany.name}) geçici görevlendirme çalışan kaydı güncellenecek.`,
+        projectId: employee.projectId,
+      });
+      return;
     }
 
     const [updated] = await db.update(employees).set(values).where(eq(employees.id, employee.id)).returning();
@@ -536,10 +626,22 @@ router.patch(
 // ---------------------------------------------------------------------------
 router.delete(
   '/:id',
-  requirePermission('insan_kaynaklari_yonetimi'),
+  requirePermission(['insan_kaynaklari_yonetimi', 'gecici_gorevlendirme_yonetimi']),
   asyncHandler(async (req, res) => {
     const [employee] = await db.select().from(employees).where(eq(employees.id, req.params.id)).limit(1);
     if (!employee) throw ApiError.notFound('Çalışan bulunamadı.');
+
+    if (!hasPermission(req, 'insan_kaynaklari_yonetimi')) {
+      // Yalnızca 'gecici_gorevlendirme_yonetimi' yetkisi olanlar sadece geçici görevlendirme
+      // firmalarındaki çalışanları silebilir.
+      let targetCompany = null;
+      if (employee.companyId) {
+        [targetCompany] = await db.select().from(companies).where(eq(companies.id, employee.companyId)).limit(1);
+      }
+      if (!targetCompany?.isTemporaryAssignment) {
+        throw ApiError.forbidden('Yalnızca geçici görevlendirme firmalarındaki çalışanları silme yetkiniz var.');
+      }
+    }
 
     await db.delete(employees).where(eq(employees.id, employee.id));
 
@@ -596,7 +698,13 @@ router.get(
     const [employee] = await db.select().from(employees).where(eq(employees.id, req.params.id)).limit(1);
     if (!employee) throw ApiError.notFound('Çalışan bulunamadı.');
 
-    if (!req.user.isSystemAdmin && !hasPermission(req, 'uygunsuzluk_gorme')) {
+    let company = null;
+    if (employee.companyId) {
+      [company] = await db.select().from(companies).where(eq(companies.id, employee.companyId)).limit(1);
+    }
+    const isTemp = !!company?.isTemporaryAssignment;
+
+    if (!req.user.isSystemAdmin && !hasPermission(req, 'uygunsuzluk_gorme') && !hasPermission(req, 'gecici_gorevlendirme_yonetimi')) {
       const scoped = await getScopedCompanyIds(req.user.sub, employee.projectId);
       if (!scoped.includes(employee.companyId)) throw ApiError.forbidden();
     }
@@ -614,7 +722,11 @@ router.get(
       .where(eq(nonconformities.employeeId, employee.id))
       .orderBy(nonconformities.createdAt);
 
-    res.json({ employee, nonconformities: rows });
+    res.json({
+      employee,
+      nonconformities: rows,
+      company: company ? { id: company.id, name: company.name, isTemporaryAssignment: isTemp } : null,
+    });
   })
 );
 

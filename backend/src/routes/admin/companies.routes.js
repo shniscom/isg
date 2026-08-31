@@ -30,7 +30,17 @@ const router = express.Router();
 // kaydı oluşturma/düzenleme/silme ve alt kaynakların (roller vb.) değiştirilmesi hâlâ yalnızca
 // 'firma_yonetme' gerektirir - bu yüzden router genelinde tek bir requirePermission yerine,
 // yazma rotalarının her birine ayrı ayrı 'firma_yonetme' eklenir.
-const VIEW_PERMISSIONS = ['firma_yonetme', 'firma_goruntuleme'];
+const VIEW_PERMISSIONS = ['firma_yonetme', 'firma_goruntuleme', 'gecici_gorevlendirme_yonetimi'];
+
+function hasPermission(req, key) {
+  return req.user.isSystemAdmin || (req.user.permissions || []).includes(key);
+}
+
+// Firma oluşturma/düzenleme/silme normalde yalnızca 'firma_yonetme' gerektirir. Ancak geçici
+// görevlendirme firmaları (companies.isTemporaryAssignment=true) için 'gecici_gorevlendirme_yonetimi'
+// yetkisi de yeterlidir - bu kişiler SADECE geçici görevlendirme firmalarını oluşturup
+// düzenleyebilir/silebilir, normal firmalara dokunamaz. bkz. handler içindeki dallanma.
+const WRITE_PERMISSIONS = ['firma_yonetme', 'gecici_gorevlendirme_yonetimi'];
 
 const COMPANY_TYPES = ['ANA_FIRMA', 'ALT_ISVEREN', 'TASERON', 'UCUNCU_SAHIS_HIZMET_VEREN', 'TEDARIKCI', 'DIGER'];
 const DANGER_CLASSES = ['COK_TEHLIKELI', 'TEHLIKELI', 'AZ_TEHLIKELI'];
@@ -53,6 +63,11 @@ const companySchema = z.object({
   // Yalnızca güncellemede kullanılır (create'te her zaman true baslar) - firmayı yeniden
   // aktifleştirmek için. bkz. PATCH /:id ve COMPANY_UPDATE executor.
   isActive: z.boolean().optional(),
+  // Sahaya geçici görevle giren firma çalışanları için (bkz. Çalışanlar/Firmalar sekmelerindeki
+  // "Geçici Görevlendirme" bölümleri). true ise bu firma normal firma listelerinden ayrı
+  // gösterilir ve oluşturma/düzenleme/silme işlemleri admin dışındaki kullanıcılar için her
+  // zaman admin onayına gider (bkz. WRITE_PERMISSIONS ve COMPANY_CREATE executor).
+  isTemporaryAssignment: z.boolean().optional(),
 });
 
 const companyUpdateSchema = companySchema.partial().omit({ projectId: true });
@@ -147,12 +162,33 @@ router.get(
 
 router.post(
   '/',
-  requirePermission('firma_yonetme'),
+  requirePermission(WRITE_PERMISSIONS),
   asyncHandler(async (req, res) => {
     const parsed = companySchema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz firma bilgisi.', parsed.error.flatten());
 
+    const isTemp = !!parsed.data.isTemporaryAssignment;
+    if (!isTemp && !hasPermission(req, 'firma_yonetme')) {
+      throw ApiError.forbidden('Yalnızca geçici görevlendirme firması oluşturma yetkiniz var.');
+    }
+
     const { blockIds, ...companyData } = parsed.data;
+
+    // Geçici görevlendirme firmaları kritik/geri dönülmez sayılır: admin dışındaki kullanıcılar
+    // için oluşturma işlemi admin onayına kuyruklanır (bkz. utils/approval.js + COMPANY_CREATE
+    // executor'ı). Normal firma oluşturma bu akışa girmez (mevcut davranış korunur).
+    if (isTemp) {
+      await runOrQueueForApproval(req, res, {
+        actionType: 'COMPANY_CREATE',
+        entityType: 'company',
+        entityId: companyData.name,
+        payload: { companyData, blockIds },
+        summary: `"${companyData.name}" geçici görevlendirme firması eklenecek.`,
+        projectId: companyData.projectId,
+        successStatus: 201,
+      });
+      return;
+    }
 
     const created = await db.transaction(async (tx) => {
       const [row] = await tx.insert(companies).values(companyData).returning();
@@ -328,7 +364,7 @@ router.get(
 // üzerinden uygulanır.
 router.patch(
   '/:id',
-  requirePermission('firma_yonetme'),
+  requirePermission(WRITE_PERMISSIONS),
   asyncHandler(async (req, res) => {
     const parsed = companyUpdateSchema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz firma bilgisi.', parsed.error.flatten());
@@ -336,7 +372,15 @@ router.patch(
     const [company] = await db.select().from(companies).where(eq(companies.id, req.params.id)).limit(1);
     if (!company) throw ApiError.notFound('Firma bulunamadı.');
 
+    if (!company.isTemporaryAssignment && !hasPermission(req, 'firma_yonetme')) {
+      throw ApiError.forbidden('Yalnızca geçici görevlendirme firmalarını düzenleme yetkiniz var.');
+    }
+
     const { blockIds, ...companyData } = parsed.data;
+    // Geçici görevlendirme bayrağını yalnızca 'firma_yonetme' yetkisi olanlar değiştirebilir.
+    if (!hasPermission(req, 'firma_yonetme')) {
+      delete companyData.isTemporaryAssignment;
+    }
 
     await runOrQueueForApproval(req, res, {
       actionType: 'COMPANY_UPDATE',
@@ -353,10 +397,14 @@ router.patch(
 // kabul edilir (firmayı tüm listelerden/atamalardan gizler) ve admin onayına tabidir.
 router.delete(
   '/:id',
-  requirePermission('firma_yonetme'),
+  requirePermission(WRITE_PERMISSIONS),
   asyncHandler(async (req, res) => {
     const [company] = await db.select().from(companies).where(eq(companies.id, req.params.id)).limit(1);
     if (!company) throw ApiError.notFound('Firma bulunamadı.');
+
+    if (!company.isTemporaryAssignment && !hasPermission(req, 'firma_yonetme')) {
+      throw ApiError.forbidden('Yalnızca geçici görevlendirme firmalarını silme yetkiniz var.');
+    }
 
     await runOrQueueForApproval(req, res, {
       actionType: 'COMPANY_DELETE',

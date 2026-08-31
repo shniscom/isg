@@ -41,6 +41,11 @@ const DEFAULT_PERMISSIONS = [
     name: 'İnsan Kaynakları Yönetimi',
     description: 'Çalışan (personel) listelerini firma bazında ekleyip/güncelleyip/çıkış işlemi yapabilir - Çalışanlar sekmesine tam erişim verir.',
   },
+  {
+    key: 'gecici_gorevlendirme_yonetimi',
+    name: 'Geçici Görevlendirme Yönetimi',
+    description: 'Sahaya geçici görevle giren firma/çalışan kayıtlarını oluşturup düzenleyebilir (admin dışındaki değişiklikler yine admin onayına tabidir).',
+  },
 ];
 
 // Firma rolü tipi kataloğu (company_role_types). Migration 0013 bu satırları FK constraint

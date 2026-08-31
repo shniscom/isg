@@ -24,6 +24,40 @@ const { hashPassword } = require('../utils/password');
 const { createNotifications } = require('./notification.service');
 const { loadAssigneeIdsFor } = require('./nonconformity.service');
 
+// employees.routes.js'deki toDateOrNull ile aynı mantık. Burada AYRICA gerekli çünkü admin
+// onayına kuyruklanan (pending_approvals.payload) istekler jsonb üzerinden saklanıp geri okunur -
+// bu round-trip'te Date nesneleri ISO string'e döner (JSON.stringify/parse serileştirmesi Date
+// tipini korumaz). Admin doğrudan uyguladığında (payload hiç DB'ye yazılmadan direkt executor'a
+// geçtiğinde) alanlar zaten gerçek Date nesnesi olabilir - new Date(value) her iki durumda da
+// (Date nesnesi veya ISO string) doğru sonucu verir, bu yüzden tarih alanları executor içinde
+// buradan geçirilerek normalize edilir.
+function toDateOrNull(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+const EMPLOYEE_DATE_FIELDS = [
+  'isgTrainingDate',
+  'isgTrainingExpiryDate',
+  'medicalExamDate',
+  'mykCertificateDate',
+  'startDate',
+  'endDate',
+  'firstStartDate',
+  'lastExitDate',
+  'orientationTrainingDate',
+];
+
+/** payload jsonb round-trip'i sonrası string'e dönmüş olabilecek tarih alanlarını gerçek Date nesnesine çevirir. */
+function normalizeEmployeeDates(data) {
+  const normalized = { ...data };
+  for (const field of EMPLOYEE_DATE_FIELDS) {
+    if (field in normalized) normalized[field] = toDateOrNull(normalized[field]);
+  }
+  return normalized;
+}
+
 /** Okunması kolay, yeterince güçlü geçici şifre üretir. Örn: "Isg-7F3kQ2z9" (bkz. admin/users.routes.js). */
 function generateTempPassword() {
   return `Isg-${crypto.randomBytes(6).toString('base64url')}`;
@@ -35,6 +69,17 @@ async function syncCompanyBlocks(tx, companyId, blockIds) {
   if (blockIds && blockIds.length > 0) {
     await tx.insert(companyBlocks).values([...new Set(blockIds)].map((blockId) => ({ companyId, blockId })));
   }
+}
+
+async function executeCompanyCreate({ companyData, blockIds }, actorId) {
+  const created = await db.transaction(async (tx) => {
+    const [row] = await tx.insert(companies).values(companyData).returning();
+    await syncCompanyBlocks(tx, row.id, blockIds);
+    return row;
+  });
+
+  await logAudit({ userId: actorId, action: 'COMPANY_CREATE', entityType: 'company', entityId: created.id, details: { companyData, blockIds }, ipAddress: null });
+  return { company: created };
 }
 
 async function executeCompanyUpdate({ companyId, companyData, blockIds }, actorId) {
@@ -185,6 +230,44 @@ async function executeUserCreate({ fullName, username, phone, email, employeeId 
   return { user: safeUser, tempPassword };
 }
 
+/**
+ * Geçici görevlendirme firmasına (companies.isTemporaryAssignment=true) yeni çalışan ekler.
+ * employees.routes.js POST / rotası doğrulama/mükerrer kontrolünü kendisi yapar ve hazır
+ * `employeeData` nesnesini buraya geçirir; bu executor yalnızca DB yazma + audit işini yapar
+ * (bkz. utils/approval.js - admin anında, admin olmayan admin onayı sonrası bu executor'ı çağırır).
+ */
+async function executeTempEmployeeCreate({ employeeData }, actorId) {
+  const [created] = await db.insert(employees).values(normalizeEmployeeDates(employeeData)).returning();
+
+  await logAudit({
+    userId: actorId,
+    action: 'EMPLOYEE_CREATE',
+    entityType: 'employee',
+    entityId: created.id,
+    details: { fullName: created.fullName, temporaryAssignment: true },
+    ipAddress: null,
+  });
+
+  return { employee: created };
+}
+
+/** Geçici görevlendirme firmasına ait bir çalışanın bilgilerini günceller (bkz. executeTempEmployeeCreate). */
+async function executeTempEmployeeUpdate({ employeeId, values }, actorId) {
+  const [updated] = await db.update(employees).set(normalizeEmployeeDates(values)).where(eq(employees.id, employeeId)).returning();
+  if (!updated) throw ApiError.notFound('Çalışan bulunamadı.');
+
+  await logAudit({
+    userId: actorId,
+    action: values.endDate !== undefined && values.endDate ? 'EMPLOYEE_ARCHIVE' : 'EMPLOYEE_UPDATE',
+    entityType: 'employee',
+    entityId: updated.id,
+    details: { ...values, temporaryAssignment: true },
+    ipAddress: null,
+  });
+
+  return { employee: updated };
+}
+
 // actionType -> executor. admin/approvals.routes.js ve utils/approval.js BUNU tek kaynak olarak kullanır.
 const EXECUTORS = {
   COMPANY_UPDATE: executeCompanyUpdate,
@@ -195,6 +278,9 @@ const EXECUTORS = {
   PENALTY_APPROVE: executePenaltyApprove,
   PENALTY_REJECT: executePenaltyReject,
   USER_CREATE: executeUserCreate,
+  COMPANY_CREATE: executeCompanyCreate,
+  TEMP_EMPLOYEE_CREATE: executeTempEmployeeCreate,
+  TEMP_EMPLOYEE_UPDATE: executeTempEmployeeUpdate,
 };
 
 module.exports = { EXECUTORS };

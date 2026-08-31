@@ -132,6 +132,10 @@ const companies = pgTable('companies', {
   requiresBoard: boolean('requires_board').notNull().default(false),
   dangerClass: dangerClassEnum('danger_class'),
   isActive: boolean('is_active').notNull().default(true),
+  // Geçici görevlendirme firması mı (sahaya kısa süreliğine görevle giren firma çalışanları için).
+  // true ise bu firma "Geçici Görevlendirme" sekmelerinde listelenir ve firma/çalışan
+  // oluşturma-düzenleme işlemleri (admin dışındaki kullanıcılar için) admin onayına tabidir.
+  isTemporaryAssignment: boolean('is_temporary_assignment').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -267,6 +271,16 @@ const employees = pgTable('employees', {
   // hem ilk giriş hem en son çıkış hem de yeni giriş tarihi birlikte gösterilebilir.
   firstStartDate: timestamp('first_start_date', { withTimezone: true }),
   lastExitDate: timestamp('last_exit_date', { withTimezone: true }),
+  // Geçici görevlendirme alanları (yalnızca companies.isTemporaryAssignment=true olan firmaların
+  // çalışanları için doldurulur; 6331 sayılı İSG Kanunu ve 5510 sayılı Kanun kapsamında sahaya
+  // geçici görevle giren personelin dosyasında bulunması gereken belgeler). Görevlendirme
+  // başlangıç/bitiş tarihleri için mevcut startDate/endDate alanları kullanılır (aynı çalışan
+  // arşivleme mantığına tabi olsun diye); İSG eğitim sertifika tarihi/geçerliliği için mevcut
+  // isgTrainingDate/isgTrainingExpiryDate alanları kullanılır.
+  assignmentFormExists: boolean('assignment_form_exists').notNull().default(false), // görevlendirme yazısı/formu var mı
+  sgkEntryDocExists: boolean('sgk_entry_doc_exists').notNull().default(false), // SGK işe giriş bildirgesi var mı
+  orientationTrainingDate: timestamp('orientation_training_date', { withTimezone: true }), // yeni sahada verilen oryantasyon eğitimi tarihi
+  ppeHandoverDocExists: boolean('ppe_handover_doc_exists').notNull().default(false), // KKD zimmet tutanağı yeni sahaya aktarıldı mı
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index('employees_project_idx').on(table.projectId),

@@ -60,6 +60,7 @@ test.before(async () => {
     { key: 'firma_goruntuleme', name: 'Firmaları Görüntüleme' },
     { key: 'kaza_bildirimi', name: 'Kaza / Ramak Kala Bildirimi Girme' },
     { key: 'insan_kaynaklari_yonetimi', name: 'İnsan Kaynakları Yönetimi' },
+    { key: 'gecici_gorevlendirme_yonetimi', name: 'Geçici Görevlendirme Yönetimi' },
   ]);
 
   await db.insert(schema.users).values({
@@ -3305,4 +3306,156 @@ test('çalışanlar: İnsan Kaynakları Yönetimi yetkisi olan (admin olmayan) k
   // Çoklu firma çalışan tespiti raporunu da görebilmeli.
   const duplicates = await api('GET', `/employees/duplicates?projectId=${projectId}`, { token: hrToken });
   assert.equal(duplicates.status, 200);
+});
+
+test('geçici görevlendirme: yalnızca gecici_gorevlendirme_yonetimi yetkisi olan (admin olmayan) kullanıcı SADECE temp firma/çalışan oluşturabilir, işlemler admin onayına gider', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Geçici Görevlendirme Projesi', code: 'TST-035' } });
+  const projectId = proj.body.project.id;
+
+  const rolesRes = await api('GET', '/admin/roles', { token: adminToken });
+  const roleId = rolesRes.body.roles[0].id;
+  const permsRes = await api('GET', '/admin/permissions', { token: adminToken });
+  const permId = (key) => permsRes.body.permissions.find((p) => p.key === key).id;
+
+  const tempUser = await api('POST', '/admin/users', { token: adminToken, body: { fullName: 'Geçici Görevlendirme Sorumlusu', username: 'gecici.sorumlusu' } });
+  const tempUserId = tempUser.body.user.id;
+  await api('POST', `/admin/users/${tempUserId}/projects`, { token: adminToken, body: { projectId, roleId } });
+  await api('POST', `/admin/users/${tempUserId}/permissions`, { token: adminToken, body: { permissionId: permId('gecici_gorevlendirme_yonetimi'), projectId } });
+
+  const login = await api('POST', '/auth/login', { body: { username: 'gecici.sorumlusu', password: tempUser.body.tempPassword } });
+  const select = await api('POST', '/auth/select-context', { body: { contextToken: login.body.contextToken, projectId, roleId } });
+  const tempToken = select.body.accessToken;
+  assert.ok(select.body.context.permissions.includes('gecici_gorevlendirme_yonetimi'));
+
+  // 1) Normal (temp olmayan) bir firma oluşturmaya çalışırsa reddedilir - bu yetki sadece
+  // geçici görevlendirme firmalarına özeldir.
+  const regularAttempt = await api('POST', '/admin/companies', {
+    token: tempToken,
+    body: { projectId, name: 'Normal Firma Denemesi', type: 'TASERON' },
+  });
+  assert.equal(regularAttempt.status, 403);
+
+  // 2) Geçici görevlendirme firması oluşturma isteği - admin olmadığı için kuyruğa alınır.
+  const tempCompanyAttempt = await api('POST', '/admin/companies', {
+    token: tempToken,
+    body: { projectId, name: 'ABC Taşeron (Geçici)', isTemporaryAssignment: true },
+  });
+  assert.equal(tempCompanyAttempt.status, 202);
+  assert.equal(tempCompanyAttempt.body.queued, true);
+  const companyApprovalId = tempCompanyAttempt.body.approval.id;
+
+  // Firma henüz gerçekten oluşmadı.
+  const stillNoCompany = await api('GET', `/admin/companies?projectId=${projectId}`, { token: adminToken });
+  assert.equal(stillNoCompany.body.companies.find((c) => c.name === 'ABC Taşeron (Geçici)'), undefined);
+
+  // Admin onaylar -> firma gerçekten oluşur, isTemporaryAssignment=true olarak işaretlenir.
+  const approveCompany = await api('POST', `/admin/approvals/${companyApprovalId}/approve`, { token: adminToken });
+  assert.equal(approveCompany.status, 200);
+  const companyId = approveCompany.body.result.company.id;
+  assert.equal(approveCompany.body.result.company.isTemporaryAssignment, true);
+
+  const afterApprove = await api('GET', `/admin/companies?projectId=${projectId}`, { token: adminToken });
+  const createdCompany = afterApprove.body.companies.find((c) => c.id === companyId);
+  assert.ok(createdCompany);
+  assert.equal(createdCompany.isTemporaryAssignment, true);
+
+  // 3) Bu firmaya çalışan eklemeye çalışırsa yine admin onayına gider (admin değil).
+  const tempEmployeeAttempt = await api('POST', '/employees', {
+    token: tempToken,
+    body: {
+      projectId,
+      companyId,
+      fullName: 'Geçici Görevli Çalışan',
+      nationalId: '88888888881',
+      position: 'Elektrikçi',
+      startDate: '2026-09-01',
+      endDate: '2026-12-31',
+      assignmentFormExists: true,
+      sgkEntryDocExists: true,
+      orientationTrainingDate: '2026-09-02',
+      ppeHandoverDocExists: true,
+    },
+  });
+  assert.equal(tempEmployeeAttempt.status, 202);
+  assert.equal(tempEmployeeAttempt.body.queued, true);
+  const employeeApprovalId = tempEmployeeAttempt.body.approval.id;
+
+  const stillNoEmployee = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&status=all`, { token: adminToken });
+  assert.equal(stillNoEmployee.body.employees.length, 0);
+
+  const approveEmployee = await api('POST', `/admin/approvals/${employeeApprovalId}/approve`, { token: adminToken });
+  assert.equal(approveEmployee.status, 200);
+  assert.equal(approveEmployee.body.result.employee.assignmentFormExists, true);
+  assert.equal(approveEmployee.body.result.employee.ppeHandoverDocExists, true);
+  const employeeId = approveEmployee.body.result.employee.id;
+
+  const afterEmployeeApprove = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&status=all`, { token: adminToken });
+  assert.equal(afterEmployeeApprove.body.employees.length, 1);
+  assert.equal(afterEmployeeApprove.body.employees[0].fullName, 'Geçici Görevli Çalışan');
+
+  // 4) Bu firmaya ait olmayan (normal) bir çalışanı düzenlemeye/silmeye çalışırsa reddedilir.
+  const otherCompany = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Normal Firma X', type: 'TASERON' } });
+  const otherEmployee = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId: otherCompany.body.company.id, fullName: 'Normal Çalışan', nationalId: '88888888882', position: 'Usta', startDate: '2026-01-01' },
+  });
+  const forbiddenEdit = await api('PATCH', `/employees/${otherEmployee.body.employee.id}`, { token: tempToken, body: { position: 'Değişecek' } });
+  assert.equal(forbiddenEdit.status, 403);
+  const forbiddenDelete = await api('DELETE', `/employees/${otherEmployee.body.employee.id}`, { token: tempToken });
+  assert.equal(forbiddenDelete.status, 403);
+
+  // 5) Kendi (temp) çalışanını düzenlemesi de admin onayına gider.
+  const editAttempt = await api('PATCH', `/employees/${employeeId}`, { token: tempToken, body: { position: 'Baş Elektrikçi' } });
+  assert.equal(editAttempt.status, 202);
+  assert.equal(editAttempt.body.queued, true);
+  const editApprovalId = editAttempt.body.approval.id;
+  const approveEdit = await api('POST', `/admin/approvals/${editApprovalId}/approve`, { token: adminToken });
+  assert.equal(approveEdit.status, 200);
+  assert.equal(approveEdit.body.result.employee.position, 'Baş Elektrikçi');
+
+  // 6) Kendi (temp) çalışanını silebilir (bu, admin onayına gitmeyen bir işlem - bkz. DELETE /employees/:id).
+  const ownDelete = await api('DELETE', `/employees/${employeeId}`, { token: tempToken });
+  assert.equal(ownDelete.status, 200);
+});
+
+test('geçici görevlendirme: admin doğrudan (onaysız) temp firma/çalışan oluşturabilir; normal firma_yonetme yetkisi tek başına temp firmayı düzenleyemez', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Geçici Görevlendirme Admin Projesi', code: 'TST-036' } });
+  const projectId = proj.body.project.id;
+
+  // Admin anında oluşturur (onaya gitmez).
+  const adminCreate = await api('POST', '/admin/companies', {
+    token: adminToken,
+    body: { projectId, name: 'Admin Tarafından Eklenen Geçici Firma', isTemporaryAssignment: true },
+  });
+  assert.equal(adminCreate.status, 201);
+  assert.equal(adminCreate.body.company.isTemporaryAssignment, true);
+  const tempCompanyId = adminCreate.body.company.id;
+
+  // Yalnızca 'firma_yonetme' yetkisi olan (admin olmayan) bir kullanıcı - bu firmayı düzenleyebilir
+  // (firma_yonetme her iki tür firmayı da kapsar) ama işlem yine admin onayına gider (COMPANY_UPDATE
+  // her zaman onaya tabi - bkz. mevcut davranış).
+  const rolesRes = await api('GET', '/admin/roles', { token: adminToken });
+  const roleId = rolesRes.body.roles[0].id;
+  const permsRes = await api('GET', '/admin/permissions', { token: adminToken });
+  const permId = (key) => permsRes.body.permissions.find((p) => p.key === key).id;
+
+  const managerUser = await api('POST', '/admin/users', { token: adminToken, body: { fullName: 'Firma Yöneticisi Test', username: 'firma.yoneticisi.test' } });
+  await api('POST', `/admin/users/${managerUser.body.user.id}/projects`, { token: adminToken, body: { projectId, roleId } });
+  await api('POST', `/admin/users/${managerUser.body.user.id}/permissions`, { token: adminToken, body: { permissionId: permId('firma_yonetme'), projectId } });
+  const login = await api('POST', '/auth/login', { body: { username: 'firma.yoneticisi.test', password: managerUser.body.tempPassword } });
+  const select = await api('POST', '/auth/select-context', { body: { contextToken: login.body.contextToken, projectId, roleId } });
+  const managerToken = select.body.accessToken;
+
+  const patchAttempt = await api('PATCH', `/admin/companies/${tempCompanyId}`, { token: managerToken, body: { name: 'Yeni İsim' } });
+  assert.equal(patchAttempt.status, 202);
+  const approvePatch = await api('POST', `/admin/approvals/${patchAttempt.body.approval.id}/approve`, { token: adminToken });
+  assert.equal(approvePatch.status, 200);
+  assert.equal(approvePatch.body.result.company.name, 'Yeni İsim');
+
+  // GET /admin/companies?projectId= listesinde geçici firma normal firmalarla birlikte döner
+  // (frontend bunu isTemporaryAssignment alanına göre ayrı gösterir) - bkz. CompaniesPage.jsx.
+  const list = await api('GET', `/admin/companies?projectId=${projectId}`, { token: adminToken });
+  const found = list.body.companies.find((c) => c.id === tempCompanyId);
+  assert.ok(found);
+  assert.equal(found.isTemporaryAssignment, true);
 });
