@@ -13,6 +13,7 @@ const ACTION_LABELS = {
   NONCONFORMITY_DELETE: 'Uygunsuzluk Silme',
   PENALTY_APPROVE: 'Ceza Onaylama',
   PENALTY_REJECT: 'Ceza Reddetme',
+  USER_CREATE: 'Roster Dışı Kullanıcı Ekleme',
 };
 
 const TABS = ['BEKLEMEDE', 'ONAYLANDI', 'REDDEDILDI'];

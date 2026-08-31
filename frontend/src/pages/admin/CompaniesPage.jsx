@@ -163,6 +163,22 @@ export function CompaniesPage() {
     }
   }
 
+  async function handleReactivate(company) {
+    setError(null);
+    setNotice(null);
+    try {
+      const { data } = await apiClient.patch(`/admin/companies/${company.id}`, { isActive: true });
+      if (data.queued) {
+        setNotice(`"${company.name}" firmasının yeniden aktifleştirilmesi admin onayına gönderildi. Admin onaylarsa uygulanacak.`);
+      } else {
+        setNotice(`"${company.name}" firması yeniden aktifleştirildi.`);
+      }
+      await loadCompanies(selectedProjectId);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
+  }
+
   function openEdit(company) {
     setEditingId(company.id);
     setEditError(null);
@@ -293,7 +309,7 @@ export function CompaniesPage() {
                       >
                         ✏️
                       </button>
-                      {c.isActive && (
+                      {c.isActive ? (
                         <button
                           type="button"
                           aria-label="Firmayı pasifleştir"
@@ -306,6 +322,20 @@ export function CompaniesPage() {
                           className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"
                         >
                           ⏸️
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          aria-label="Firmayı yeniden aktifleştir"
+                          title="Aktifleştir"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleReactivate(c);
+                          }}
+                          className="rounded-lg p-2 text-slate-400 hover:bg-emerald-50 hover:text-emerald-600"
+                        >
+                          ▶️
                         </button>
                       )}
                     </div>

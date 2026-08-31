@@ -61,6 +61,10 @@ export function EmployeesPage() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [rowDeletingId, setRowDeletingId] = useState(null);
 
+  const [duplicateGroups, setDuplicateGroups] = useState(null);
+  const [showDuplicates, setShowDuplicates] = useState(false);
+  const [duplicateRemovingId, setDuplicateRemovingId] = useState(null);
+
   useEffect(() => {
     if (user?.isSystemAdmin) {
       apiClient
@@ -82,12 +86,39 @@ export function EmployeesPage() {
       .catch((err) => setError(getErrorMessage(err)));
   }
 
+  function loadDuplicates() {
+    if (!activeProjectId || !user?.isSystemAdmin) return;
+    const params = user?.isSystemAdmin ? { projectId: activeProjectId } : {};
+    apiClient
+      .get('/employees/duplicates', { params })
+      .then(({ data }) => setDuplicateGroups(data.groups))
+      .catch(() => setDuplicateGroups(null));
+  }
+
   useEffect(() => {
     setSelectedCompany(null);
     setCompanies(null);
+    setDuplicateGroups(null);
+    setShowDuplicates(false);
     loadCompanies();
+    loadDuplicates();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProjectId]);
+
+  async function handleRemoveDuplicate(emp) {
+    if (!window.confirm(`${emp.fullName} (${emp.companyName}) firma çalışan listesinden kaldırılsın mı? Bu işlem geri alınamaz.`)) return;
+    setDuplicateRemovingId(emp.id);
+    try {
+      await apiClient.delete(`/employees/${emp.id}`);
+      loadDuplicates();
+      loadCompanies();
+      if (selectedCompany?.id === emp.companyId) loadEmployees();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setDuplicateRemovingId(null);
+    }
+  }
 
   function loadEmployees() {
     if (!activeProjectId || !selectedCompany) return;
@@ -260,6 +291,47 @@ export function EmployeesPage() {
               </option>
             ))}
           </Select>
+        )}
+
+        {user?.isSystemAdmin && duplicateGroups?.length > 0 && (
+          <Card className="space-y-2 border-amber-200 bg-amber-50">
+            <button type="button" onClick={() => setShowDuplicates((v) => !v)} className="flex w-full items-center justify-between text-left">
+              <span className="text-sm font-semibold text-amber-800">
+                ⚠️ {duplicateGroups.length} çalışan birden fazla firmada kayıtlı
+              </span>
+              <span className="text-xs font-medium text-amber-700">{showDuplicates ? 'Gizle ▲' : 'Göster ▼'}</span>
+            </button>
+            {showDuplicates && (
+              <div className="space-y-3 pt-1">
+                {duplicateGroups.map((group, idx) => (
+                  <div key={idx} className="rounded-lg border border-amber-200 bg-surface p-2.5">
+                    <div className="mb-1.5 text-xs font-medium text-slate-600">TC: {group[0].nationalId}</div>
+                    <div className="space-y-1.5">
+                      {group.map((emp) => (
+                        <div key={emp.id} className="flex items-center justify-between gap-2 text-xs">
+                          <div className="min-w-0">
+                            <div className="truncate font-medium text-slate-800">{emp.fullName}</div>
+                            <div className="truncate text-slate-500">
+                              {emp.companyName}
+                              {emp.position ? ` · ${emp.position}` : ''}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveDuplicate(emp)}
+                            disabled={duplicateRemovingId === emp.id}
+                            className="shrink-0 rounded-lg px-2 py-1 font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+                          >
+                            {duplicateRemovingId === emp.id ? 'Kaldırılıyor...' : 'Bu firmadan kaldır'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
         )}
 
         {companies === null && <p className="text-sm text-slate-500">Yükleniyor...</p>}

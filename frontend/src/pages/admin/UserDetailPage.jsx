@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import apiClient, { getErrorMessage } from '../../api/client';
+import { useAuth } from '../../context/AuthContext';
 import { Card, Button, Select, Alert, Badge } from '../../components/ui';
 import { PERMISSION_DESCRIPTIONS } from '../../lib/permissions';
 
 export function UserDetailPage() {
   const { id } = useParams();
+  const { user: authUser } = useAuth();
   const [user, setUser] = useState(null);
   const [stats, setStats] = useState(null);
   const [assignments, setAssignments] = useState([]);
@@ -29,6 +31,16 @@ export function UserDetailPage() {
   const [grantPermissionIds, setGrantPermissionIds] = useState([]);
   const [grantProjectId, setGrantProjectId] = useState('');
   const [grantSubmitting, setGrantSubmitting] = useState(false);
+
+  // Kullanıcı silme yerine arşivleme (bkz. backend admin/users.routes.js archive-check/archive).
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveCheck, setArchiveCheck] = useState(null); // { linkedEmployee, openNonconformities }
+  const [archiveCheckLoading, setArchiveCheckLoading] = useState(false);
+  const [assignableUsersByProject, setAssignableUsersByProject] = useState({});
+  const [reassignments, setReassignments] = useState({}); // { [nonconformityId]: newUserId }
+  const [archiveEndDate, setArchiveEndDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [archiveSubmitting, setArchiveSubmitting] = useState(null); // null | 'EXIT' | 'ROLE_CHANGE'
+  const [archiveError, setArchiveError] = useState(null);
 
   async function load() {
     try {
@@ -65,7 +77,9 @@ export function UserDetailPage() {
     }
     apiClient
       .get('/admin/companies', { params: { projectId: assignProjectId } })
-      .then(({ data }) => setProjectCompanies(data.companies))
+      // Pasif firmalar yeni atama yapılırken seçilebilir olmamalı (zaten yapılmış eski atamalar
+      // ayrıca bkz. assignments listesi - onlar burada değil, "Mevcut Atamalar" bölümünde gösterilir).
+      .then(({ data }) => setProjectCompanies((data.companies || []).filter((c) => c.isActive)))
       .catch(() => setProjectCompanies([]));
     apiClient
       .get(`/admin/projects/${assignProjectId}/blocks`)
@@ -211,6 +225,51 @@ export function UserDetailPage() {
     }
   }
 
+  async function handleOpenArchive() {
+    setArchiveOpen(true);
+    setArchiveError(null);
+    setArchiveCheckLoading(true);
+    setReassignments({});
+    try {
+      const { data } = await apiClient.get(`/admin/users/${id}/archive-check`);
+      setArchiveCheck(data);
+      const projectIds = [...new Set(data.openNonconformities.map((n) => n.projectId))];
+      const entries = await Promise.all(
+        projectIds.map((pid) =>
+          apiClient
+            .get('/nonconformities/assignable-users', { params: { projectId: pid } })
+            .then(({ data: d }) => [pid, d.users.filter((u) => u.userId !== id)])
+            .catch(() => [pid, []])
+        )
+      );
+      setAssignableUsersByProject(Object.fromEntries(entries));
+    } catch (err) {
+      setArchiveError(getErrorMessage(err));
+    } finally {
+      setArchiveCheckLoading(false);
+    }
+  }
+
+  async function handleArchive(mode) {
+    setArchiveSubmitting(mode);
+    setArchiveError(null);
+    try {
+      const reassignmentList = Object.entries(reassignments)
+        .filter(([, newAssigneeUserId]) => newAssigneeUserId)
+        .map(([nonconformityId, newAssigneeUserId]) => ({ nonconformityId, newAssigneeUserId }));
+      const payload = { mode, reassignments: reassignmentList };
+      if (mode === 'EXIT') payload.endDate = archiveEndDate;
+      await apiClient.post(`/admin/users/${id}/archive`, payload);
+      setArchiveOpen(false);
+      setNotice(mode === 'EXIT' ? 'Kullanıcı ve bağlı çalışan kaydı çıkış olarak arşivlendi.' : 'Kullanıcı hesabı görev değişikliği nedeniyle arşivlendi.');
+      await load();
+    } catch (err) {
+      setArchiveError(getErrorMessage(err));
+    } finally {
+      setArchiveSubmitting(null);
+    }
+  }
+
   if (error) return <Alert>{error}</Alert>;
   if (!user) return <p className="text-sm text-slate-500">Yükleniyor...</p>;
 
@@ -225,10 +284,17 @@ export function UserDetailPage() {
       <div className="flex items-center gap-2">
         <h1 className="text-2xl font-bold text-slate-800">{user.fullName}</h1>
         {user.isSystemAdmin && <Badge variant="info">Admin</Badge>}
+        {!user.isActive && <Badge variant="danger">Arşivde / Pasif</Badge>}
       </div>
       <p className="text-sm text-slate-500">@{user.username}</p>
 
       {notice && <Alert variant="success">{notice}</Alert>}
+      {!user.isActive && (
+        <Alert variant="warning">
+          Bu kullanıcı arşivlenmiş (pasif). Giriş yapamaz, proje atamaları ve yetkileri kaldırılmıştır. Geçmiş
+          açtığı/kapattığı uygunsuzluk kayıtları korunmaktadır.
+        </Alert>
+      )}
 
       {!user.isSystemAdmin && stats && (
         <Card>
@@ -473,6 +539,134 @@ export function UserDetailPage() {
           </div>
         </form>
       </Card>
+
+      {user.isActive && authUser?.id !== user.id && (
+        <Card className="space-y-4 border-red-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold text-slate-800">Kullanıcıyı Arşivle</h2>
+              <p className="text-xs text-slate-500">
+                Kullanıcılar kalıcı olarak silinemez (geçmiş uygunsuzluk kayıtları bozulmasın diye); bunun yerine
+                arşivlenir.
+              </p>
+            </div>
+            {!archiveOpen && (
+              <Button variant="secondary" onClick={handleOpenArchive}>
+                Arşivle
+              </Button>
+            )}
+          </div>
+
+          {archiveOpen && (
+            <div className="space-y-4 border-t border-slate-100 pt-4">
+              {archiveError && <Alert>{archiveError}</Alert>}
+              {archiveCheckLoading && <p className="text-sm text-slate-500">Kontrol ediliyor...</p>}
+
+              {archiveCheck && (
+                <>
+                  {archiveCheck.openNonconformities.length > 0 && (
+                    <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                      <p className="text-sm font-medium text-amber-800">
+                        ⚠️ Bu kullanıcının üzerinde {archiveCheck.openNonconformities.length} açık uygunsuzluk var.
+                        Arşivlemeden önce isterseniz başka birine devredin (devretmezseniz kayıt arşivlenen
+                        kullanıcı üzerinde kalmaya devam eder, kaybolmaz).
+                      </p>
+                      <div className="space-y-2">
+                        {archiveCheck.openNonconformities.map((nc) => (
+                          <div key={nc.id} className="flex flex-col gap-1.5 rounded-lg bg-surface p-2.5 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium text-slate-800">{nc.number}</div>
+                              <div className="truncate text-xs text-slate-500">{nc.description}</div>
+                            </div>
+                            <Select
+                              value={reassignments[nc.id] || ''}
+                              onChange={(e) => setReassignments((prev) => ({ ...prev, [nc.id]: e.target.value }))}
+                              className="sm:w-56"
+                            >
+                              <option value="">Devretmeden bırak</option>
+                              {(assignableUsersByProject[nc.projectId] || []).map((u) => (
+                                <option key={u.userId} value={u.userId}>
+                                  {u.fullName} ({u.roleName})
+                                </option>
+                              ))}
+                            </Select>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="rounded-xl border border-slate-200 p-3">
+                    <p className="mb-2 text-sm font-medium text-slate-700">Arşivleme sebebi</p>
+                    {archiveCheck.linkedEmployee ? (
+                      <div className="space-y-3">
+                        <p className="text-xs text-slate-500">
+                          Bu kullanıcı <strong>{archiveCheck.linkedEmployee.fullName}</strong> çalışan kaydına bağlı
+                          ({archiveCheck.linkedEmployee.companyName || 'firma yok'}).
+                        </p>
+                        <div className="rounded-lg bg-slate-50 p-3">
+                          <p className="text-sm font-medium text-slate-800">Çıkış (işten/projeden ayrıldı)</p>
+                          <p className="mb-2 text-xs text-slate-500">
+                            Hem kullanıcı hesabı hem bağlı çalışan kaydı, girilen tarihle birlikte arşivlenir.
+                          </p>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                            <input
+                              type="date"
+                              value={archiveEndDate}
+                              onChange={(e) => setArchiveEndDate(e.target.value)}
+                              className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                            />
+                            <Button
+                              variant="danger"
+                              disabled={archiveSubmitting !== null}
+                              onClick={() => handleArchive('EXIT')}
+                            >
+                              {archiveSubmitting === 'EXIT' ? 'Arşivleniyor...' : 'Çıkış Olarak Arşivle'}
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="rounded-lg bg-slate-50 p-3">
+                          <p className="text-sm font-medium text-slate-800">Görev değişikliği</p>
+                          <p className="mb-2 text-xs text-slate-500">
+                            Yalnızca sistem kullanıcısı hesabı arşivlenir; çalışan kaydı sahada çalışmaya devam
+                            ettiği için dokunulmaz.
+                          </p>
+                          <Button
+                            variant="secondary"
+                            disabled={archiveSubmitting !== null}
+                            onClick={() => handleArchive('ROLE_CHANGE')}
+                          >
+                            {archiveSubmitting === 'ROLE_CHANGE' ? 'Arşivleniyor...' : 'Görev Değişikliği (Yalnızca Hesabı Arşivle)'}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-lg bg-slate-50 p-3">
+                        <p className="mb-2 text-xs text-slate-500">
+                          Bu kullanıcı bir çalışan kaydına bağlı değil, bu yüzden yalnızca hesap arşivlenebilir.
+                          (Kişi bir firmadan işten ayrıldıysa, o firmanın çalışan kaydını Çalışanlar sekmesinden
+                          arşivlemeniz de gerekir.)
+                        </p>
+                        <Button
+                          variant="secondary"
+                          disabled={archiveSubmitting !== null}
+                          onClick={() => handleArchive('ROLE_CHANGE')}
+                        >
+                          {archiveSubmitting === 'ROLE_CHANGE' ? 'Arşivleniyor...' : 'Hesabı Arşivle'}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              <button type="button" onClick={() => setArchiveOpen(false)} className="text-xs text-slate-500 hover:underline">
+                Vazgeç
+              </button>
+            </div>
+          )}
+        </Card>
+      )}
     </div>
   );
 }
