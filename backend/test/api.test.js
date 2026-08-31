@@ -2912,6 +2912,80 @@ test('kullanıcılar: roster seçiminde firma filtresi - roster-companies ve emp
   assert.ok(!filteredA.body.employees.some((e) => e.id === empB.body.employee.id));
 });
 
+test('kullanıcılar: kayıtsız kullanıcı kalıcı olarak silinebilir, kaydı olan kullanıcı silinemez', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Test Şantiyesi 33', code: 'TST-033' } });
+  const projectId = proj.body.project.id;
+  const rolesRes = await api('GET', '/admin/roles', { token: adminToken });
+  const roleId = rolesRes.body.roles[0].id;
+  const permsRes = await api('GET', '/admin/permissions', { token: adminToken });
+  const permId = (key) => permsRes.body.permissions.find((p) => p.key === key).id;
+
+  // Hiç kaydı olmayan taze bir kullanıcı - detayında canDelete=true ve recordCounts.total=0 görünmeli.
+  const freshUser = await api('POST', '/admin/users', {
+    token: adminToken,
+    body: { fullName: 'Kayıtsız Kullanıcı', username: 'kayitsiz.kullanici' },
+  });
+  const freshUserId = freshUser.body.user.id;
+
+  const freshDetail = await api('GET', `/admin/users/${freshUserId}`, { token: adminToken });
+  assert.equal(freshDetail.status, 200);
+  assert.equal(freshDetail.body.recordCounts.total, 0);
+  assert.equal(freshDetail.body.canDelete, true);
+
+  const del = await api('DELETE', `/admin/users/${freshUserId}`, { token: adminToken });
+  assert.equal(del.status, 200);
+
+  const afterDelete = await api('GET', `/admin/users/${freshUserId}`, { token: adminToken });
+  assert.equal(afterDelete.status, 404);
+
+  // Kendi hesabını silmeye çalışmak engellenmeli.
+  const selfDelete = await api('DELETE', '/admin/users/' + JSON.parse(Buffer.from(adminToken.split('.')[1], 'base64url').toString()).sub, {
+    token: adminToken,
+  });
+  assert.equal(selfDelete.status, 400);
+
+  // Uygunsuzluk açmış bir kullanıcı - artık kaydı var, silinememeli.
+  const activeUser = await api('POST', '/admin/users', {
+    token: adminToken,
+    body: { fullName: 'Kaydı Olan Kullanıcı', username: 'kaydi.olan.kullanici' },
+  });
+  const activeUserId = activeUser.body.user.id;
+  await api('POST', `/admin/users/${activeUserId}/projects`, { token: adminToken, body: { projectId, roleId } });
+  await api('POST', `/admin/users/${activeUserId}/permissions`, {
+    token: adminToken,
+    body: { permissionId: permId('uygunsuzluk_acma'), projectId },
+  });
+
+  const login = await api('POST', '/auth/login', { body: { username: 'kaydi.olan.kullanici', password: activeUser.body.tempPassword } });
+  const select = await api('POST', '/auth/select-context', {
+    body: { contextToken: login.body.contextToken, projectId, roleId },
+  });
+  const activeUserToken = select.body.accessToken;
+
+  // Kendine atama yapılamadığından, atanacak ayrı bir kişi daha oluşturulur.
+  const assigneeUser = await api('POST', '/admin/users', {
+    token: adminToken,
+    body: { fullName: 'Atanan Kişi', username: 'kayit.testi.atanan' },
+  });
+  await api('POST', `/admin/users/${assigneeUser.body.user.id}/projects`, { token: adminToken, body: { projectId, roleId } });
+
+  await api('POST', '/nonconformities', {
+    token: activeUserToken,
+    body: {
+      description: 'Kayıt testi için uygunsuzluk',
+      dueDate: new Date(Date.now() + 86400000).toISOString(),
+      assignedUserIds: [assigneeUser.body.user.id],
+    },
+  });
+
+  const activeDetail = await api('GET', `/admin/users/${activeUserId}`, { token: adminToken });
+  assert.ok(activeDetail.body.recordCounts.total > 0);
+  assert.equal(activeDetail.body.canDelete, false);
+
+  const blockedDelete = await api('DELETE', `/admin/users/${activeUserId}`, { token: adminToken });
+  assert.equal(blockedDelete.status, 409);
+});
+
 test('kullanıcılar: silme yerine arşivleme - EXIT modu (bağlı çalışan da arşive alınır) + açık uygunsuzluk devri', async () => {
   const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Test Şantiyesi 27', code: 'TST-027' } });
   const projectId = proj.body.project.id;
@@ -3024,6 +3098,79 @@ test('kullanıcılar: silme yerine arşivleme - ROLE_CHANGE modu (yalnızca hesa
   assert.equal(userAfter.body.user.isActive, false);
   // Proje ataması deaktive edilmiş olmalı.
   assert.ok(userAfter.body.assignments.every((a) => a.isActive === false));
+});
+
+test('kullanıcılar: arşivlenen kullanıcının elindeki geçerli token da anında geçersiz sayılır', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Test Şantiyesi 32', code: 'TST-032' } });
+  const projectId = proj.body.project.id;
+  const rolesRes = await api('GET', '/admin/roles', { token: adminToken });
+  const roleId = rolesRes.body.roles[0].id;
+
+  const created = await api('POST', '/admin/users', {
+    token: adminToken,
+    body: { fullName: 'Anlık Engel Testi', username: 'anlik.engel.testi' },
+  });
+  const userId = created.body.user.id;
+  await api('POST', `/admin/users/${userId}/projects`, { token: adminToken, body: { projectId, roleId } });
+
+  const login = await api('POST', '/auth/login', { body: { username: 'anlik.engel.testi', password: created.body.tempPassword } });
+  const select = await api('POST', '/auth/select-context', {
+    body: { contextToken: login.body.contextToken, projectId, roleId },
+  });
+  const token = select.body.accessToken;
+
+  // Token geçerliyken normal bir uç çalışmalı (bildirimler yalnızca requireAuth ister, özel
+  // bir yetki gerektirmez - bu yüzden yalnızca oturum geçerliliğini test etmek için uygundur).
+  const before = await api('GET', '/notifications', { token });
+  assert.equal(before.status, 200);
+
+  // Admin bu kullanıcıyı arşivler (görev değişikliği) - token hiçbir şekilde iptal edilmez/değişmez.
+  const archive = await api('POST', `/admin/users/${userId}/archive`, { token: adminToken, body: { mode: 'ROLE_CHANGE' } });
+  assert.equal(archive.status, 200);
+
+  // Aynı (hâlâ süresi dolmamış) token ile yapılan istek artık reddedilmeli.
+  const after = await api('GET', '/notifications', { token });
+  assert.equal(after.status, 401);
+});
+
+test('kullanıcılar: arşivlemede elle devredilmeyen açık uygunsuzluklar otomatik olarak işlemi yapan admine devredilir', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Test Şantiyesi 34', code: 'TST-034' } });
+  const projectId = proj.body.project.id;
+  const rolesRes = await api('GET', '/admin/roles', { token: adminToken });
+  const roleId = rolesRes.body.roles[0].id;
+
+  const targetUser = await api('POST', '/admin/users', {
+    token: adminToken,
+    body: { fullName: 'Otomatik Devir Testi', username: 'otomatik.devir.testi' },
+  });
+  const targetUserId = targetUser.body.user.id;
+  await api('POST', `/admin/users/${targetUserId}/projects`, { token: adminToken, body: { projectId, roleId } });
+
+  const nc = await api('POST', '/nonconformities', {
+    token: adminToken,
+    body: {
+      projectId,
+      assignedUserIds: [targetUserId],
+      description: 'Otomatik devir testi için açık uygunsuzluk kaydı.',
+      dueDate: new Date(Date.now() + 86400000).toISOString(),
+    },
+  });
+  const ncId = nc.body.nonconformity.id;
+
+  // reassignments göndermeden (admin elle kimseye devretmeden) arşivlenir - kayıt sahipsiz
+  // kalmamalı, otomatik olarak arşivleme işlemini yapan admine devredilmeli.
+  const archive = await api('POST', `/admin/users/${targetUserId}/archive`, {
+    token: adminToken,
+    body: { mode: 'ROLE_CHANGE' },
+  });
+  assert.equal(archive.status, 200);
+  assert.equal(archive.body.autoTransferredCount, 1);
+
+  const adminUserId = JSON.parse(Buffer.from(adminToken.split('.')[1], 'base64url').toString()).sub;
+  const ncDetail = await api('GET', `/nonconformities/${ncId}`, { token: adminToken });
+  assert.equal(ncDetail.status, 200);
+  assert.ok(ncDetail.body.nonconformity.assignees.some((a) => a.userId === adminUserId));
+  assert.ok(!ncDetail.body.nonconformity.assignees.some((a) => a.userId === targetUserId));
 });
 
 test('çalışanlar: giriş/çıkış geçmişi - ilk giriş sabit kalır, manuel çıkış+yeniden içe aktarma ile giriş "yeniden giriş" olarak güncellenir, en son çıkış tarihi korunur', async () => {

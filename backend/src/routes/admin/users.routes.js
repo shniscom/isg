@@ -2,8 +2,13 @@ const express = require('express');
 const crypto = require('crypto');
 const { z } = require('zod');
 const { db } = require('../../db/client');
-const { users, userProjects, userPermissions, projects, roles, permissions, companies, projectBlocks, nonconformities, nonconformityAssignees, userInvites, employees } = require('../../db/schema');
-const { eq, and, isNull, count, inArray } = require('drizzle-orm');
+const {
+  users, userProjects, userPermissions, projects, roles, permissions, companies, projectBlocks,
+  nonconformities, nonconformityAssignees, nonconformityCorrections, nonconformityPhotos,
+  nonconformityStatusHistory, penalties, dueDateExtensions, incidents, companyDocuments,
+  boardMeetings, equipment, companyRoleAssignments, archives, pendingApprovals, userInvites, employees,
+} = require('../../db/schema');
+const { eq, and, or, isNull, count, inArray } = require('drizzle-orm');
 const { asyncHandler } = require('../../utils/asyncHandler');
 const { ApiError } = require('../../utils/apiError');
 const { requirePermission } = require('../../middleware/permission');
@@ -14,6 +19,78 @@ const { runOrQueueForApproval } = require('../../utils/approval');
 
 const router = express.Router();
 router.use(requirePermission('kullanici_yonetme'));
+
+// ---------------------------------------------------------------------------
+// Bir kullanıcının sistemdeki TÜM geçmiş kayıtlarını (açtığı uygunsuzluk, düzeltme/inceleme,
+// ceza, termin talebi, kaza kaydı, yüklediği belge/fotoğraf, oluşturduğu tutanak vb.) sayar.
+// İki amacı var:
+//   1) Kullanıcı detay sayfasında "bu kişinin sistemde ne kadar geçmişi var" özetini göstermek.
+//   2) Kalıcı silme (DELETE /:id) için güvenlik kontrolü: toplam 0 değilse silme engellenir -
+//      bu tablolardaki *ById alanlarının çoğu FK'de ON DELETE davranışı tanımlamaz (RESTRICT),
+//      yani zaten veritabanı seviyesinde de engellenir; burada sadece kullanıcıya erken ve
+//      anlaşılır bir mesaj vermek için önden kontrol ediyoruz.
+// ---------------------------------------------------------------------------
+async function getUserRecordCounts(userId) {
+  const c = (table, column) =>
+    db.select({ value: count() }).from(table).where(eq(column, userId)).then((r) => r[0]?.value || 0);
+  const cOr = (table, columnA, columnB) =>
+    db
+      .select({ value: count() })
+      .from(table)
+      .where(or(eq(columnA, userId), eq(columnB, userId)))
+      .then((r) => r[0]?.value || 0);
+
+  const [
+    opened,
+    assigned,
+    corrections,
+    photos,
+    statusHistory,
+    penaltiesInvolved,
+    dueDateExtensionsInvolved,
+    incidentsCreated,
+    companyDocumentsCreated,
+    boardMeetingsCreated,
+    equipmentCreated,
+    companyRoleAssignmentsCreated,
+    archivesInvolved,
+    pendingApprovalsInvolved,
+  ] = await Promise.all([
+    c(nonconformities, nonconformities.openedById),
+    c(nonconformityAssignees, nonconformityAssignees.userId),
+    cOr(nonconformityCorrections, nonconformityCorrections.submittedById, nonconformityCorrections.reviewedById),
+    c(nonconformityPhotos, nonconformityPhotos.uploadedById),
+    c(nonconformityStatusHistory, nonconformityStatusHistory.actorId),
+    cOr(penalties, penalties.requestedById, penalties.decidedById),
+    cOr(dueDateExtensions, dueDateExtensions.requestedById, dueDateExtensions.decidedById),
+    c(incidents, incidents.createdById),
+    c(companyDocuments, companyDocuments.createdById),
+    c(boardMeetings, boardMeetings.createdById),
+    c(equipment, equipment.createdById),
+    c(companyRoleAssignments, companyRoleAssignments.createdById),
+    cOr(archives, archives.createdById, archives.deletedById),
+    cOr(pendingApprovals, pendingApprovals.requestedById, pendingApprovals.decidedById),
+  ]);
+
+  const counts = {
+    opened,
+    assigned,
+    corrections,
+    photos,
+    statusHistory,
+    penalties: penaltiesInvolved,
+    dueDateExtensions: dueDateExtensionsInvolved,
+    incidents: incidentsCreated,
+    companyDocuments: companyDocumentsCreated,
+    boardMeetings: boardMeetingsCreated,
+    equipment: equipmentCreated,
+    companyRoleAssignments: companyRoleAssignmentsCreated,
+    archives: archivesInvolved,
+    pendingApprovals: pendingApprovalsInvolved,
+  };
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  return { ...counts, total };
+}
 
 function generateTempPassword() {
   // Okunması kolay, yeterince güçlü geçici şifre üretir. Örn: "Isg-7F3kQ2z9"
@@ -220,7 +297,7 @@ router.get(
       .innerJoin(permissions, eq(userPermissions.permissionId, permissions.id))
       .where(eq(userPermissions.userId, user.id));
 
-    const [[openedRow], [closedRow], [assignedOpenRow]] = await Promise.all([
+    const [[openedRow], [closedRow], [assignedOpenRow], recordCounts] = await Promise.all([
       db.select({ value: count() }).from(nonconformities).where(eq(nonconformities.openedById, user.id)),
       db
         .select({ value: count() })
@@ -232,6 +309,7 @@ router.get(
         .from(nonconformityAssignees)
         .innerJoin(nonconformities, eq(nonconformityAssignees.nonconformityId, nonconformities.id))
         .where(and(eq(nonconformityAssignees.userId, user.id), inArray(nonconformities.status, ['ACIK', 'BEKLEMEDE', 'TERMIN_ASIMI']))),
+      getUserRecordCounts(user.id),
     ]);
 
     const { passwordHash, ...safeUser } = user;
@@ -244,6 +322,9 @@ router.get(
         closed: closedRow?.value || 0,
         assignedOpen: assignedOpenRow?.value || 0,
       },
+      // Silme (DELETE /:id) uygunluğunu belirleyen kapsamlı kayıt dökümü - bkz. getUserRecordCounts.
+      recordCounts,
+      canDelete: recordCounts.total === 0 && !user.isSystemAdmin,
     });
   })
 );
@@ -328,6 +409,8 @@ router.post(
       throw ApiError.badRequest('Bu kullanıcı bir çalışan kaydına bağlı değil, çıkış işlemi yapılamaz. Görev değişikliği seçeneğini kullanın.');
     }
 
+    let autoTransferredCount = 0;
+
     await db.transaction(async (tx) => {
       for (const r of parsed.data.reassignments) {
         await tx
@@ -336,6 +419,31 @@ router.post(
         await tx
           .insert(nonconformityAssignees)
           .values({ nonconformityId: r.nonconformityId, userId: r.newAssigneeUserId })
+          .onConflictDoNothing();
+      }
+
+      // Admin'in elle devretmediği (yukarıdaki listede olmayan) açık uygunsuzluk atamaları
+      // sahipsiz/askıda kalmasın diye, arşivlemeyi yapan admine otomatik devredilir. Böylece
+      // arşivlenen kullanıcı artık sisteme müdahale edemediği için bu kayıtlar kaybolmaz; işlemi
+      // yapan admin daha sonra Uygunsuzluklar üzerinden uygun gördüğü kişiye yeniden atayabilir.
+      const remainingAssignments = await tx
+        .select({ nonconformityId: nonconformityAssignees.nonconformityId })
+        .from(nonconformityAssignees)
+        .innerJoin(nonconformities, eq(nonconformityAssignees.nonconformityId, nonconformities.id))
+        .where(
+          and(
+            eq(nonconformityAssignees.userId, user.id),
+            inArray(nonconformities.status, ['ACIK', 'BEKLEMEDE', 'TERMIN_ASIMI'])
+          )
+        );
+      autoTransferredCount = remainingAssignments.length;
+      for (const row of remainingAssignments) {
+        await tx
+          .delete(nonconformityAssignees)
+          .where(and(eq(nonconformityAssignees.nonconformityId, row.nonconformityId), eq(nonconformityAssignees.userId, user.id)));
+        await tx
+          .insert(nonconformityAssignees)
+          .values({ nonconformityId: row.nonconformityId, userId: req.user.sub })
           .onConflictDoNothing();
       }
 
@@ -354,7 +462,7 @@ router.post(
       action: 'USER_ARCHIVE',
       entityType: 'user',
       entityId: user.id,
-      details: { mode: parsed.data.mode, reassignedCount: parsed.data.reassignments.length },
+      details: { mode: parsed.data.mode, reassignedCount: parsed.data.reassignments.length, autoTransferredCount },
       ipAddress: req.ip,
     });
     if (parsed.data.mode === 'EXIT') {
@@ -368,7 +476,43 @@ router.post(
       });
     }
 
-    res.json({ success: true, mode: parsed.data.mode });
+    res.json({ success: true, mode: parsed.data.mode, autoTransferredCount });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Kalıcı silme - yalnızca sistemde HİÇ kaydı olmayan (hiçbir uygunsuzluk/ceza/düzeltme/kaza/
+// belge vb. ile ilişkisi bulunmayan) kullanıcılar için. Böyle bir kullanıcı silindiğinde
+// kaybedilecek bir geçmiş olmadığından, arşivleme yerine listeyi gereksiz yere kalabalıklaştıran
+// hesabı doğrudan kaldırmak mantıklı - bkz. getUserRecordCounts. Kaydı olan kullanıcılar için
+// hâlâ yalnızca arşivleme (POST /:id/archive) kullanılabilir.
+// ---------------------------------------------------------------------------
+router.delete(
+  '/:id',
+  asyncHandler(async (req, res) => {
+    if (req.params.id === req.user.sub) throw ApiError.badRequest('Kendi hesabınızı silemezsiniz.');
+
+    const [user] = await db.select().from(users).where(eq(users.id, req.params.id)).limit(1);
+    if (!user) throw ApiError.notFound('Kullanıcı bulunamadı.');
+    if (user.isSystemAdmin) throw ApiError.badRequest('Sistem admini hesapları silinemez.');
+
+    const recordCounts = await getUserRecordCounts(user.id);
+    if (recordCounts.total > 0) {
+      throw ApiError.conflict(
+        'Bu kullanıcının sistemde kayıtları var (açtığı/incelediği uygunsuzluk, ceza, kaza kaydı vb.), bu yüzden silinemez. Bunun yerine arşivleyin.'
+      );
+    }
+
+    try {
+      await db.delete(users).where(eq(users.id, user.id));
+    } catch (err) {
+      // Yukarıdaki sayım her ihtimale karşı eksik kalmış olsa bile, veritabanı FK kısıtları
+      // yine de son bir güvenlik ağı sağlar - bu durumda kullanıcıya anlaşılır bir hata döneriz.
+      throw ApiError.conflict('Bu kullanıcı silinemedi, sistemde beklenmedik bir bağlantısı olabilir. Bunun yerine arşivleyin.');
+    }
+
+    await logAudit({ userId: req.user.sub, action: 'USER_DELETE', entityType: 'user', entityId: user.id, details: { username: user.username }, ipAddress: req.ip });
+    res.json({ success: true });
   })
 );
 

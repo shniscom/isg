@@ -2,6 +2,9 @@ const { verifyToken } = require('../utils/jwt');
 const { ApiError } = require('../utils/apiError');
 const { asyncHandler } = require('../utils/asyncHandler');
 const { getEffectivePermissions } = require('../services/permissions.service');
+const { db } = require('../db/client');
+const { users } = require('../db/schema');
+const { eq } = require('drizzle-orm');
 
 function extractToken(req) {
   const header = req.headers.authorization || '';
@@ -29,6 +32,14 @@ const requireAuth = asyncHandler(async (req, res, next) => {
 
   if (decoded.type !== 'access') {
     throw ApiError.unauthorized('Geçersiz oturum türü.');
+  }
+
+  // Yetkiler gibi aktiflik durumu da JWT'ye güvenilmeden her istekte veritabanından
+  // doğrulanır. Aksi halde arşivlenen/silinen bir kullanıcı, elindeki geçerli token süresi
+  // (12 saate kadar) dolana kadar sisteme müdahale etmeye devam edebilirdi.
+  const [dbUser] = await db.select({ isActive: users.isActive }).from(users).where(eq(users.id, decoded.sub)).limit(1);
+  if (!dbUser || !dbUser.isActive) {
+    throw ApiError.unauthorized('Hesabınız pasif veya arşivlenmiş. Sisteme giriş yapamazsınız.');
   }
 
   let permissions = decoded.permissions || [];
