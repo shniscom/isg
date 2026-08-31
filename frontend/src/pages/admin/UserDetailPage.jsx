@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import apiClient, { getErrorMessage } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
 import { Card, Button, Select, Alert, Badge } from '../../components/ui';
-import { PERMISSION_DESCRIPTIONS } from '../../lib/permissions';
+import { PERMISSION_DESCRIPTIONS, PERMISSION_CATEGORIES } from '../../lib/permissions';
 
 export function UserDetailPage() {
   const { id } = useParams();
@@ -142,6 +142,15 @@ export function UserDetailPage() {
     permissions.filter((p) => (p.projectId || null) === currentScopeProjectId).map((p) => p.permissionId)
   );
   const grantablePermissions = allPermissions.filter((p) => !alreadyGrantedPermissionIds.has(p.id));
+  // Yetki listesi kategoriye göre gruplanır (Uygunsuzluk, İtiraz, İnsan Kaynakları vb.) - 19+
+  // kalemlik düz bir liste içinde belirli bir yetkiyi (örn. "İnsan Kaynakları Yönetimi") bulmak
+  // zorlaşıyordu.
+  const categorizedKeys = new Set(PERMISSION_CATEGORIES.flatMap((cat) => cat.keys));
+  const groupedGrantablePermissions = PERMISSION_CATEGORIES.map((cat) => ({
+    ...cat,
+    items: grantablePermissions.filter((p) => cat.keys.includes(p.key)),
+  })).filter((g) => g.items.length > 0);
+  const uncategorizedGrantablePermissions = grantablePermissions.filter((p) => !categorizedKeys.has(p.key));
 
   function toggleGrantPermission(permId) {
     setGrantPermissionIds((prev) =>
@@ -491,26 +500,57 @@ export function UserDetailPage() {
               Bu kapsam için tanımlı tüm yetkiler zaten verilmiş.
             </p>
           ) : (
-          <div className="max-h-80 space-y-1 overflow-y-auto rounded-xl border border-slate-200 p-2">
-            {grantablePermissions.map((p) => (
-              <label
-                key={p.id}
-                className="flex cursor-pointer items-start gap-3 rounded-lg px-3 py-2 hover:bg-slate-50"
-              >
-                <input
-                  type="checkbox"
-                  className="mt-1 h-4 w-4 rounded border-slate-300 text-brand-700 focus:ring-brand-500"
-                  checked={grantPermissionIds.includes(p.id)}
-                  onChange={() => toggleGrantPermission(p.id)}
-                />
-                <span>
-                  <span className="block text-sm font-medium text-slate-800">{p.name}</span>
-                  {PERMISSION_DESCRIPTIONS[p.key] && (
-                    <span className="block text-xs text-slate-500">{PERMISSION_DESCRIPTIONS[p.key]}</span>
-                  )}
-                </span>
-              </label>
+          <div className="max-h-80 space-y-3 overflow-y-auto rounded-xl border border-slate-200 p-2">
+            {groupedGrantablePermissions.map((group) => (
+              <div key={group.title}>
+                <div className="px-2 py-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  {group.icon} {group.title}
+                </div>
+                {group.items.map((p) => (
+                  <label
+                    key={p.id}
+                    className="flex cursor-pointer items-start gap-3 rounded-lg px-3 py-2 hover:bg-slate-50"
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-1 h-4 w-4 rounded border-slate-300 text-brand-700 focus:ring-brand-500"
+                      checked={grantPermissionIds.includes(p.id)}
+                      onChange={() => toggleGrantPermission(p.id)}
+                    />
+                    <span>
+                      <span className="block text-sm font-medium text-slate-800">{p.name}</span>
+                      {PERMISSION_DESCRIPTIONS[p.key] && (
+                        <span className="block text-xs text-slate-500">{PERMISSION_DESCRIPTIONS[p.key]}</span>
+                      )}
+                    </span>
+                  </label>
+                ))}
+              </div>
             ))}
+            {uncategorizedGrantablePermissions.length > 0 && (
+              <div>
+                <div className="px-2 py-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Diğer</div>
+                {uncategorizedGrantablePermissions.map((p) => (
+                  <label
+                    key={p.id}
+                    className="flex cursor-pointer items-start gap-3 rounded-lg px-3 py-2 hover:bg-slate-50"
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-1 h-4 w-4 rounded border-slate-300 text-brand-700 focus:ring-brand-500"
+                      checked={grantPermissionIds.includes(p.id)}
+                      onChange={() => toggleGrantPermission(p.id)}
+                    />
+                    <span>
+                      <span className="block text-sm font-medium text-slate-800">{p.name}</span>
+                      {PERMISSION_DESCRIPTIONS[p.key] && (
+                        <span className="block text-xs text-slate-500">{PERMISSION_DESCRIPTIONS[p.key]}</span>
+                      )}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
           )}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end">

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import apiClient, { getErrorMessage } from '../../api/client';
 import { Card, Button, Input, Select, Alert, Badge } from '../../components/ui';
+import { EmployeeCombobox } from '../../components/EmployeeCombobox';
 
 const EMPTY_FORM = { fullName: '', username: '', phone: '', email: '' };
 
@@ -19,6 +20,8 @@ export function UsersPage() {
   // arasından seçilebilmeli" kuralı için - bkz. backend admin/users.routes.js.
   const [projects, setProjects] = useState(null);
   const [rosterProjectId, setRosterProjectId] = useState('');
+  const [rosterCompanies, setRosterCompanies] = useState(null);
+  const [rosterCompanyId, setRosterCompanyId] = useState('');
   const [candidates, setCandidates] = useState(null);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
   const [offRoster, setOffRoster] = useState(false);
@@ -43,15 +46,32 @@ export function UsersPage() {
       .catch(() => setProjects([]));
   }, []);
 
+  // Proje değişince firma listesi yeniden yüklenir; firma ve çalışan seçimi sıfırlanır.
+  useEffect(() => {
+    if (!rosterProjectId) return;
+    setRosterCompanies(null);
+    setRosterCompanyId('');
+    setCandidates(null);
+    setSelectedEmployeeId('');
+    apiClient
+      .get('/admin/users/roster-companies', { params: { projectId: rosterProjectId } })
+      .then(({ data }) => setRosterCompanies(data.companies))
+      .catch(() => setRosterCompanies([]));
+  }, [rosterProjectId]);
+
+  // Firma seçimine göre (veya "Tüm Firmalar" için firma seçilmeden) çalışan adayları yüklenir -
+  // liste önce firmaya göre daraltılır, ardından aranabilir kutuda isim/TC ile filtrelenir.
   useEffect(() => {
     if (!rosterProjectId) return;
     setCandidates(null);
     setSelectedEmployeeId('');
+    const params = { projectId: rosterProjectId };
+    if (rosterCompanyId) params.companyId = rosterCompanyId;
     apiClient
-      .get('/admin/users/employee-candidates', { params: { projectId: rosterProjectId } })
+      .get('/admin/users/employee-candidates', { params })
       .then(({ data }) => setCandidates(data.employees))
       .catch(() => setCandidates([]));
-  }, [rosterProjectId]);
+  }, [rosterProjectId, rosterCompanyId]);
 
   function resetForm() {
     setForm(EMPTY_FORM);
@@ -80,8 +100,10 @@ export function UsersPage() {
       resetForm();
       await load();
       if (rosterProjectId) {
+        const params = { projectId: rosterProjectId };
+        if (rosterCompanyId) params.companyId = rosterCompanyId;
         apiClient
-          .get('/admin/users/employee-candidates', { params: { projectId: rosterProjectId } })
+          .get('/admin/users/employee-candidates', { params })
           .then(({ data: d }) => setCandidates(d.employees))
           .catch(() => {});
       }
@@ -142,25 +164,37 @@ export function UsersPage() {
             )}
 
             {!offRoster && (
-              <div className="space-y-1.5">
-                <Select
-                  label="Çalışan (firma listesinden seçin)"
-                  value={selectedEmployeeId}
-                  onChange={(e) => setSelectedEmployeeId(e.target.value)}
-                >
-                  <option value="">{candidates === null ? 'Yükleniyor...' : 'Seçiniz...'}</option>
-                  {candidates?.map((emp) => (
-                    <option key={emp.id} value={emp.id}>
-                      {emp.fullName} — {emp.companyName || 'Firma yok'}
-                      {emp.nationalId ? ` (TC: ${emp.nationalId})` : ''}
-                    </option>
-                  ))}
-                </Select>
-                {candidates?.length === 0 && (
-                  <p className="text-xs text-slate-500">
-                    Bu projede henüz bir kullanıcıya bağlanmamış aktif çalışan bulunamadı.
-                  </p>
+              <div className="space-y-4">
+                {rosterCompanies && rosterCompanies.length > 0 && (
+                  <Select
+                    label="Firma (listeyi daraltmak için seçin, opsiyonel)"
+                    value={rosterCompanyId}
+                    onChange={(e) => setRosterCompanyId(e.target.value)}
+                  >
+                    <option value="">Tüm Firmalar</option>
+                    {rosterCompanies.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </Select>
                 )}
+                <div className="space-y-1.5">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">Çalışan</span>
+                  <EmployeeCombobox
+                    employees={candidates || []}
+                    value={selectedEmployeeId}
+                    onChange={setSelectedEmployeeId}
+                    placeholder={candidates === null ? 'Yükleniyor...' : 'İsim veya TC no yazarak arayın...'}
+                  />
+                  {candidates?.length === 0 && (
+                    <p className="text-xs text-slate-500">
+                      {rosterCompanyId
+                        ? 'Bu firmada henüz bir kullanıcıya bağlanmamış aktif çalışan bulunamadı.'
+                        : 'Bu projede henüz bir kullanıcıya bağlanmamış aktif çalışan bulunamadı.'}
+                    </p>
+                  )}
+                </div>
               </div>
             )}
 

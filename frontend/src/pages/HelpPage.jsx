@@ -241,6 +241,7 @@ const TOPICS = [
         paragraphs: [
           'Kullanıcı Yönetme yetkisi (genelde admin) gerekir. Kullanıcılar sekmesinde "+ Yeni Kullanıcı" ile önce Proje seçilir.',
           'Kullanıcılar yalnızca o projedeki firmaların çalışan rosterından — yani sistemde kayıtlı, henüz kullanıcı hesabı olmayan aktif bir çalışandan — seçilebilir.',
+          'Liste kalabalıklaşmasın diye önce (opsiyonel) bir Firma seçilir; ardından açılan aranabilir kutuya isim veya T.C. kimlik no yazılarak istenen kişi bulunur — bu kutu gerçek bir metin alanı olduğundan mobilde dokununca klavye otomatik açılır.',
           'Eklenecek kişi roster\'da yoksa (örn. henüz çalışan kaydı girilmemiş biri), "Roster dışı" kutusu işaretlenip bilgiler elle girilir. Bu durumda hesap hemen oluşmaz; talep admin onayına düşer (Onay Bekleyenler sayfasında görünür) ve admin onaylayınca hesap açılır.',
           'Roster\'dan seçilen kişi için hesap anında oluşturulur ve geçici bir şifre üretilir; kullanıcı ilk girişinde şifresini değiştirmek zorundadır.',
         ],
@@ -248,7 +249,8 @@ const TOPICS = [
       {
         heading: 'Yetki ve görev atama',
         paragraphs: [
-          'Kullanıcı detay sayfasından kişiye proje/görev ataması yapılır ve verilecek yetkiler (çoklu seçim listesi, "Tümünü Seç" seçeneğiyle) işaretlenir.',
+          'Kullanıcı detay sayfasından kişiye proje/görev ataması yapılır ve verilecek yetkiler işaretlenir.',
+          'Verilecek yetkiler listesi kategori başlıklarına göre gruplanmıştır (Uygunsuzluk İşlemleri, İtiraz, Termin Uzatma, Saha Yaptırımları, Kaza/Ramak Kala, Raporlama, Yönetim, İnsan Kaynakları vb.); aradığınız yetkiyi kategori başlığından hızlıca bulabilir, "Tümünü Seç" ile listedeki tüm yetkileri tek seferde işaretleyebilirsiniz. Örneğin bir çalışana yalnızca çalışan roster\'ını güncelleme yetkisi vermek için "İnsan Kaynakları" kategorisi altındaki "İnsan Kaynakları Yönetimi" yetkisini işaretlemeniz yeterlidir.',
           'Her kullanıcı, "Yetkilerim" sayfasından kendi hesabına tanımlı yetkileri kategori bazlı ve açıklamalı olarak görebilir.',
         ],
       },
