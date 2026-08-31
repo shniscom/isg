@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { to: '/admin/firmalar', label: 'Firmalar', icon: '🏢', permission: ['firma_yonetme', 'firma_goruntuleme'] },
   { to: '/admin/kullanicilar', label: 'Kullanıcılar', icon: '👤', permission: 'kullanici_yonetme' },
   { to: '/admin/gorevler', label: 'Görevler', icon: '🎯', permission: 'kullanici_yonetme' },
+  { to: '/admin/onaylar', label: 'Onay Bekleyenler', icon: '✅', adminOnly: true },
   { to: '/admin/kategoriler', label: 'Kategoriler', icon: '🏷️', adminOnly: true },
   { to: '/admin/arsiv', label: 'Arşiv', icon: '🗄️', adminOnly: true },
   { to: '/admin/ayarlar', label: 'Ayarlar', icon: '⚙️', adminOnly: true },

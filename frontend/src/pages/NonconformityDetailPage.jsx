@@ -132,8 +132,13 @@ export function NonconformityDetailPage() {
     setError(null);
     setDeleteSubmitting(true);
     try {
-      await apiClient.delete(`/nonconformities/${id}`);
-      navigate('/uygunsuzluklar/liste');
+      const { data } = await apiClient.delete(`/nonconformities/${id}`);
+      if (data.queued) {
+        setNotice('Bu uygunsuzluğun silinmesi admin onayına gönderildi. Admin onaylarsa kalıcı olarak silinecek.');
+        setDeleteSubmitting(false);
+      } else {
+        navigate('/uygunsuzluklar/liste');
+      }
     } catch (err) {
       setError(getErrorMessage(err));
       setDeleteSubmitting(false);

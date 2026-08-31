@@ -24,12 +24,22 @@ export function RolesPage() {
   const [formError, setFormError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
+  const [editingRoleId, setEditingRoleId] = useState(null);
+  const [editForm, setEditForm] = useState({ name: '', description: '' });
+  const [editFormError, setEditFormError] = useState(null);
+  const [editSubmitting, setEditSubmitting] = useState(false);
+
   const [roleTypes, setRoleTypes] = useState(null);
   const [roleTypesError, setRoleTypesError] = useState(null);
   const [showRoleTypeForm, setShowRoleTypeForm] = useState(false);
   const [roleTypeForm, setRoleTypeForm] = useState({ label: '', category: 'FIRMA_ROLU' });
   const [roleTypeFormError, setRoleTypeFormError] = useState(null);
   const [roleTypeSubmitting, setRoleTypeSubmitting] = useState(false);
+
+  const [editingRoleTypeId, setEditingRoleTypeId] = useState(null);
+  const [editRoleTypeForm, setEditRoleTypeForm] = useState({ label: '', category: 'FIRMA_ROLU' });
+  const [editRoleTypeFormError, setEditRoleTypeFormError] = useState(null);
+  const [editRoleTypeSubmitting, setEditRoleTypeSubmitting] = useState(false);
 
   async function load() {
     try {
@@ -71,11 +81,38 @@ export function RolesPage() {
   }
 
   async function handleDelete(role) {
+    if (!window.confirm(`"${role.name}" görevi silinsin mi?`)) return;
     try {
       await apiClient.delete(`/admin/roles/${role.id}`);
       await load();
     } catch (err) {
       setError(getErrorMessage(err));
+    }
+  }
+
+  function openEditRole(role) {
+    setEditingRoleId(role.id);
+    setEditForm({ name: role.name, description: role.description || '' });
+    setEditFormError(null);
+  }
+
+  function closeEditRole() {
+    setEditingRoleId(null);
+    setEditFormError(null);
+  }
+
+  async function handleUpdateRole(e) {
+    e.preventDefault();
+    setEditFormError(null);
+    setEditSubmitting(true);
+    try {
+      await apiClient.patch(`/admin/roles/${editingRoleId}`, editForm);
+      setEditingRoleId(null);
+      await load();
+    } catch (err) {
+      setEditFormError(getErrorMessage(err));
+    } finally {
+      setEditSubmitting(false);
     }
   }
 
@@ -107,6 +144,36 @@ export function RolesPage() {
       await loadRoleTypes();
     } catch (err) {
       setRoleTypesError(getErrorMessage(err));
+    }
+  }
+
+  function openEditRoleType(roleType) {
+    setEditingRoleTypeId(roleType.id);
+    setEditRoleTypeForm({ label: roleType.label, category: roleType.category });
+    setEditRoleTypeFormError(null);
+  }
+
+  function closeEditRoleType() {
+    setEditingRoleTypeId(null);
+    setEditRoleTypeFormError(null);
+  }
+
+  async function handleUpdateRoleType(e) {
+    e.preventDefault();
+    setEditRoleTypeFormError(null);
+    if (!editRoleTypeForm.label.trim()) return;
+    setEditRoleTypeSubmitting(true);
+    try {
+      await apiClient.patch(`/admin/company-role-types/${editingRoleTypeId}`, {
+        label: editRoleTypeForm.label.trim(),
+        category: editRoleTypeForm.category,
+      });
+      setEditingRoleTypeId(null);
+      await loadRoleTypes();
+    } catch (err) {
+      setEditRoleTypeFormError(getErrorMessage(err));
+    } finally {
+      setEditRoleTypeSubmitting(false);
     }
   }
 
@@ -145,17 +212,44 @@ export function RolesPage() {
         )}
 
         <div className="space-y-3">
-          {roles?.map((r) => (
-            <Card key={r.id} className="flex items-center justify-between">
-              <div>
-                <div className="font-semibold text-slate-800">{r.name}</div>
-                {r.description && <div className="text-sm text-slate-500">{r.description}</div>}
-              </div>
-              <Button variant="ghost" onClick={() => handleDelete(r)}>
-                Sil
-              </Button>
-            </Card>
-          ))}
+          {roles?.map((r) =>
+            editingRoleId === r.id ? (
+              <Card key={r.id}>
+                <form onSubmit={handleUpdateRole} className="space-y-4">
+                  {editFormError && <Alert>{editFormError}</Alert>}
+                  <Input label="Görev Adı" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} required />
+                  <Input
+                    label="Açıklama"
+                    value={editForm.description}
+                    onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                  />
+                  <div className="flex gap-3">
+                    <Button type="submit" disabled={editSubmitting}>
+                      {editSubmitting ? 'Kaydediliyor...' : 'Kaydet'}
+                    </Button>
+                    <Button type="button" variant="secondary" onClick={closeEditRole}>
+                      Vazgeç
+                    </Button>
+                  </div>
+                </form>
+              </Card>
+            ) : (
+              <Card key={r.id} className="flex items-center justify-between">
+                <div>
+                  <div className="font-semibold text-slate-800">{r.name}</div>
+                  {r.description && <div className="text-sm text-slate-500">{r.description}</div>}
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <Button variant="ghost" onClick={() => openEditRole(r)}>
+                    Düzenle
+                  </Button>
+                  <Button variant="ghost" onClick={() => handleDelete(r)}>
+                    Sil
+                  </Button>
+                </div>
+              </Card>
+            )
+          )}
         </div>
       </section>
 
@@ -196,17 +290,53 @@ export function RolesPage() {
 
         <div className="space-y-3">
           {roleTypes?.length === 0 && <p className="text-sm text-slate-500">Henüz firma rolü tanımlanmamış.</p>}
-          {roleTypes?.map((rt) => (
-            <Card key={rt.id} className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-slate-800">{rt.label}</span>
-                <Badge variant={rt.category === 'ACIL_EKIP' ? 'orange' : 'purple'}>{CATEGORY_LABELS[rt.category] || rt.category}</Badge>
-              </div>
-              <Button variant="ghost" onClick={() => handleDeleteRoleType(rt)}>
-                Sil
-              </Button>
-            </Card>
-          ))}
+          {roleTypes?.map((rt) =>
+            editingRoleTypeId === rt.id ? (
+              <Card key={rt.id}>
+                <form onSubmit={handleUpdateRoleType} className="space-y-4">
+                  {editRoleTypeFormError && <Alert>{editRoleTypeFormError}</Alert>}
+                  <Input
+                    label="Rol Adı"
+                    value={editRoleTypeForm.label}
+                    onChange={(e) => setEditRoleTypeForm({ ...editRoleTypeForm, label: e.target.value })}
+                    required
+                  />
+                  <Select
+                    label="Kategori"
+                    value={editRoleTypeForm.category}
+                    onChange={(e) => setEditRoleTypeForm({ ...editRoleTypeForm, category: e.target.value })}
+                  >
+                    <option value="FIRMA_ROLU">Firma Rolü</option>
+                    <option value="ACIL_EKIP">Acil Durum Ekibi</option>
+                  </Select>
+                  <p className="text-xs text-slate-400">Anahtar ({rt.key}) değiştirilemez; yalnızca isim ve kategori güncellenebilir.</p>
+                  <div className="flex gap-3">
+                    <Button type="submit" disabled={editRoleTypeSubmitting}>
+                      {editRoleTypeSubmitting ? 'Kaydediliyor...' : 'Kaydet'}
+                    </Button>
+                    <Button type="button" variant="secondary" onClick={closeEditRoleType}>
+                      Vazgeç
+                    </Button>
+                  </div>
+                </form>
+              </Card>
+            ) : (
+              <Card key={rt.id} className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-slate-800">{rt.label}</span>
+                  <Badge variant={rt.category === 'ACIL_EKIP' ? 'orange' : 'purple'}>{CATEGORY_LABELS[rt.category] || rt.category}</Badge>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <Button variant="ghost" onClick={() => openEditRoleType(rt)}>
+                    Düzenle
+                  </Button>
+                  <Button variant="ghost" onClick={() => handleDeleteRoleType(rt)}>
+                    Sil
+                  </Button>
+                </div>
+              </Card>
+            )
+          )}
         </div>
       </section>
     </div>

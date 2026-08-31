@@ -6,6 +6,7 @@ import { Card, Button, Input, Alert, Badge } from '../../components/ui';
 export function ProjectsPage() {
   const [projects, setProjects] = useState(null);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', code: '', address: '', employer: '' });
   const [formError, setFormError] = useState(null);
@@ -41,9 +42,18 @@ export function ProjectsPage() {
   }
 
   async function toggleStatus(project) {
+    setError(null);
+    setNotice(null);
     const nextStatus = project.status === 'AKTIF' ? 'PASIF' : 'AKTIF';
-    await apiClient.patch(`/admin/projects/${project.id}/status`, { status: nextStatus });
-    await load();
+    try {
+      const { data } = await apiClient.patch(`/admin/projects/${project.id}/status`, { status: nextStatus });
+      if (data.queued) {
+        setNotice(`"${project.name}" projesinin durum değişikliği admin onayına gönderildi. Admin onaylarsa uygulanacak.`);
+      }
+      await load();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
   }
 
   return (
@@ -54,6 +64,7 @@ export function ProjectsPage() {
       </div>
 
       {error && <Alert>{error}</Alert>}
+      {notice && <Alert variant="success">{notice}</Alert>}
 
       {showForm && (
         <Card>

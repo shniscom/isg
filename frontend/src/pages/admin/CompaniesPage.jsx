@@ -83,6 +83,7 @@ export function CompaniesPage() {
   const [projectBlocks, setProjectBlocks] = useState([]);
   const [companies, setCompanies] = useState(null);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -149,8 +150,17 @@ export function CompaniesPage() {
   }
 
   async function handleDeactivate(company) {
-    await apiClient.delete(`/admin/companies/${company.id}`);
-    await loadCompanies(selectedProjectId);
+    setError(null);
+    setNotice(null);
+    try {
+      const { data } = await apiClient.delete(`/admin/companies/${company.id}`);
+      if (data.queued) {
+        setNotice(`"${company.name}" firmasının silinmesi admin onayına gönderildi. Admin onaylarsa uygulanacak.`);
+      }
+      await loadCompanies(selectedProjectId);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
   }
 
   function openEdit(company) {
@@ -177,9 +187,13 @@ export function CompaniesPage() {
     e.preventDefault();
     if (!editingId || !editForm) return;
     setEditError(null);
+    setNotice(null);
     setEditSubmitting(true);
     try {
-      await apiClient.patch(`/admin/companies/${editingId}`, editForm);
+      const { data } = await apiClient.patch(`/admin/companies/${editingId}`, editForm);
+      if (data.queued) {
+        setNotice('Firma düzenlemesi admin onayına gönderildi. Admin onaylarsa uygulanacak.');
+      }
       closeEdit();
       await loadCompanies(selectedProjectId);
     } catch (err) {
@@ -201,6 +215,7 @@ export function CompaniesPage() {
       </div>
 
       {error && <Alert>{error}</Alert>}
+      {notice && <Alert variant="success">{notice}</Alert>}
 
       {projects.length === 0 ? (
         <Alert variant="warning">Firma tanımlayabilmek için önce bir proje oluşturmalısınız.</Alert>

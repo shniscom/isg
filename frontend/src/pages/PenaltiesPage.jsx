@@ -11,11 +11,15 @@ import {
 } from '../lib/nonconformity';
 
 const STATUS_FILTERS = ['BEKLEMEDE', 'ONAYLANDI', 'REDDEDILDI'];
+// Sayfa açıldığında onaylı/reddedilmiş/bekleyen TÜM cezalar görünsün diye varsayılan sekme "Tümü".
+const FILTER_TABS = ['TUMU', ...STATUS_FILTERS];
+const TAB_LABELS = { TUMU: 'Tümü', ...PENALTY_STATUS_LABELS };
 
 export function PenaltiesPage() {
   const { user } = useAuth();
-  const [status, setStatus] = useState('BEKLEMEDE');
+  const [status, setStatus] = useState('TUMU');
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
   const [rejectingId, setRejectingId] = useState(null);
   const [rejectNote, setRejectNote] = useState('');
   const [busyId, setBusyId] = useState(null);
@@ -56,17 +60,24 @@ export function PenaltiesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adminProjectId]);
 
-  const statusCounts = STATUS_FILTERS.reduce((acc, s) => {
-    acc[s] = allPenalties ? allPenalties.filter((p) => p.status === s).length : 0;
-    return acc;
-  }, {});
-  const penalties = allPenalties ? allPenalties.filter((p) => p.status === status) : null;
+  const statusCounts = STATUS_FILTERS.reduce(
+    (acc, s) => {
+      acc[s] = allPenalties ? allPenalties.filter((p) => p.status === s).length : 0;
+      return acc;
+    },
+    { TUMU: allPenalties ? allPenalties.length : 0 }
+  );
+  const penalties = allPenalties ? (status === 'TUMU' ? allPenalties : allPenalties.filter((p) => p.status === status)) : null;
 
   async function handleApprove(id) {
     setBusyId(id);
     setError(null);
+    setNotice(null);
     try {
-      await apiClient.post(`/penalties/${id}/approve`);
+      const { data } = await apiClient.post(`/penalties/${id}/approve`);
+      if (data.queued) {
+        setNotice('Ceza onayı admin onayına gönderildi. Admin onaylarsa ceza kesinleşecek.');
+      }
       await load();
     } catch (err) {
       setError(getErrorMessage(err));
@@ -79,8 +90,12 @@ export function PenaltiesPage() {
     if (!rejectNote.trim()) return;
     setBusyId(id);
     setError(null);
+    setNotice(null);
     try {
-      await apiClient.post(`/penalties/${id}/reject`, { decisionNote: rejectNote });
+      const { data } = await apiClient.post(`/penalties/${id}/reject`, { decisionNote: rejectNote });
+      if (data.queued) {
+        setNotice('Ceza reddi admin onayına gönderildi. Admin onaylarsa ret kesinleşecek.');
+      }
       setRejectingId(null);
       setRejectNote('');
       await load();
@@ -96,6 +111,7 @@ export function PenaltiesPage() {
       <h1 className="text-2xl font-bold text-slate-800">Cezalar</h1>
 
       {error && <Alert>{error}</Alert>}
+      {notice && <Alert variant="success">{notice}</Alert>}
 
       {user?.isSystemAdmin && adminProjects && (
         <Select value={adminProjectId} onChange={(e) => setAdminProjectId(e.target.value)}>
@@ -107,8 +123,8 @@ export function PenaltiesPage() {
         </Select>
       )}
 
-      <div className="flex gap-2">
-        {STATUS_FILTERS.map((s) => (
+      <div className="flex flex-wrap gap-2">
+        {FILTER_TABS.map((s) => (
           <button
             key={s}
             onClick={() => setStatus(s)}
@@ -116,12 +132,14 @@ export function PenaltiesPage() {
               status === s ? 'bg-brand-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
             }`}
           >
-            {PENALTY_STATUS_LABELS[s]} – {statusCounts[s]}
+            {TAB_LABELS[s]} – {statusCounts[s]}
           </button>
         ))}
       </div>
 
-      {penalties?.length === 0 && <p className="text-sm text-slate-500">Bu durumda ceza kaydı yok.</p>}
+      {penalties?.length === 0 && (
+        <p className="text-sm text-slate-500">{status === 'TUMU' ? 'Henüz ceza kaydı yok.' : 'Bu durumda ceza kaydı yok.'}</p>
+      )}
 
       <div className="space-y-3">
         {penalties?.map((p) => (

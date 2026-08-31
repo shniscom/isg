@@ -238,9 +238,13 @@ function GenelTab({ company, blocks, projectBlocks, mykStats, penalties, inciden
     setError(null);
     try {
       const { data } = await apiClient.patch(`/admin/companies/${company.id}`, { blockIds });
-      onBlocksUpdated((projectBlocks || []).filter((b) => blockIds.includes(b.id)));
-      onUpdated(data.company);
-      setNotice('Sorumlu bölgeler güncellendi.');
+      if (data.queued) {
+        setNotice('Bölge değişikliği admin onayına gönderildi. Admin onaylarsa uygulanacak.');
+      } else {
+        onBlocksUpdated((projectBlocks || []).filter((b) => blockIds.includes(b.id)));
+        onUpdated(data.company);
+        setNotice('Sorumlu bölgeler güncellendi.');
+      }
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -256,8 +260,12 @@ function GenelTab({ company, blocks, projectBlocks, mykStats, penalties, inciden
         requiresBoard: form.requiresBoard,
         dangerClass: form.dangerClass || null,
       });
-      onUpdated(data.company);
-      setNotice('Firma bilgileri güncellendi.');
+      if (data.queued) {
+        setNotice('Firma düzenlemesi admin onayına gönderildi. Admin onaylarsa uygulanacak.');
+      } else {
+        onUpdated(data.company);
+        setNotice('Firma bilgileri güncellendi.');
+      }
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {

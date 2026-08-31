@@ -23,6 +23,7 @@ import { RolesPage } from './pages/admin/RolesPage';
 import { CategoriesPage } from './pages/admin/CategoriesPage';
 import { SettingsPage } from './pages/admin/SettingsPage';
 import { ArchivesPage } from './pages/admin/ArchivesPage';
+import { PendingApprovalsPage } from './pages/admin/PendingApprovalsPage';
 import { NonconformitiesListPage } from './pages/NonconformitiesListPage';
 import { NonconformityCompanyCardsPage } from './pages/NonconformityCompanyCardsPage';
 import { NewNonconformityPage } from './pages/NewNonconformityPage';
@@ -164,6 +165,14 @@ function AppRoutes() {
           element={
             <AdminRoute>
               <ArchivesPage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/admin/onaylar"
+          element={
+            <AdminRoute>
+              <PendingApprovalsPage />
             </AdminRoute>
           }
         />

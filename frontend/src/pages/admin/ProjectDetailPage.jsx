@@ -18,6 +18,12 @@ export function ProjectDetailPage() {
   const [resetNotice, setResetNotice] = useState(null);
   const [resetSubmitting, setResetSubmitting] = useState(false);
 
+  const [showEditInfo, setShowEditInfo] = useState(false);
+  const [infoForm, setInfoForm] = useState({ name: '', code: '' });
+  const [infoError, setInfoError] = useState(null);
+  const [infoNotice, setInfoNotice] = useState(null);
+  const [infoSubmitting, setInfoSubmitting] = useState(false);
+
   async function load() {
     try {
       const { data } = await apiClient.get(`/admin/projects/${id}`);
@@ -51,6 +57,44 @@ export function ProjectDetailPage() {
     await load();
   }
 
+  function openEditInfo() {
+    setInfoForm({ name: project.name, code: project.code });
+    setInfoError(null);
+    setInfoNotice(null);
+    setShowEditInfo(true);
+  }
+
+  async function handleSaveInfo(e) {
+    e.preventDefault();
+    setInfoError(null);
+    setInfoNotice(null);
+    setInfoSubmitting(true);
+    try {
+      const { data } = await apiClient.patch(`/admin/projects/${id}`, { name: infoForm.name, code: infoForm.code });
+      setInfoNotice(
+        data.queued
+          ? 'Proje bilgisi değişikliği admin onayına gönderildi. Admin onaylarsa uygulanacak.'
+          : 'Proje bilgileri güncellendi.'
+      );
+      setShowEditInfo(false);
+      await load();
+    } catch (err) {
+      setInfoError(getErrorMessage(err));
+    } finally {
+      setInfoSubmitting(false);
+    }
+  }
+
+  // Uygunsuzluk numarası formatı: {YIL}-{PROJE_KODU}-{6 haneli sıra no}, bkz.
+  // backend/src/services/nonconformity.service.js -> generateNonconformityNumber.
+  // Bir sonraki üretilecek numara, projenin mevcut sırasının bir fazlasıdır.
+  function previewNonconformityNumber(code) {
+    const year = new Date().getFullYear();
+    const nextSeq = (project?.nonconformitySeq || 0) + 1;
+    const seqPadded = String(nextSeq).padStart(6, '0');
+    return `${year}-${(code || '???').trim() || '???'}-${seqPadded}`;
+  }
+
   async function handleResetProject(e) {
     e.preventDefault();
     setResetError(null);
@@ -80,9 +124,49 @@ export function ProjectDetailPage() {
         <h1 className="text-2xl font-bold text-slate-800">{project.name}</h1>
         <Badge variant={project.status === 'AKTIF' ? 'success' : 'default'}>{project.status}</Badge>
       </div>
-      <p className="text-sm text-slate-500">
-        {project.code} {project.address ? `· ${project.address}` : ''}
-      </p>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm text-slate-500">
+          {project.code} {project.address ? `· ${project.address}` : ''}
+        </p>
+        {!showEditInfo && (
+          <button onClick={openEditInfo} className="shrink-0 text-xs font-medium text-brand-700 hover:underline">
+            Düzenle
+          </button>
+        )}
+      </div>
+
+      {infoNotice && !showEditInfo && <Alert variant="success">{infoNotice}</Alert>}
+
+      {showEditInfo && (
+        <Card>
+          <h2 className="mb-3 font-semibold text-slate-800">Proje Bilgilerini Düzenle</h2>
+          <form onSubmit={handleSaveInfo} className="space-y-4">
+            {infoError && <Alert>{infoError}</Alert>}
+            <Input label="Proje Adı" value={infoForm.name} onChange={(e) => setInfoForm({ ...infoForm, name: e.target.value })} required />
+            <Input label="Proje Kodu" value={infoForm.code} onChange={(e) => setInfoForm({ ...infoForm, code: e.target.value })} required />
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+              <p className="text-xs text-slate-500">
+                Bu kodla bundan sonra açılacak bir sonraki uygunsuzluğun numarası şöyle görünecek:
+              </p>
+              <p className="mt-1 font-mono text-sm font-semibold text-slate-800">{previewNonconformityNumber(infoForm.code)}</p>
+              {infoForm.code !== project.code && (
+                <p className="mt-1 text-xs text-amber-700">
+                  Not: Daha önce "{project.code}" koduyla açılmış uygunsuzlukların numaraları değişmez; yalnızca bundan
+                  sonra açılacaklar yeni kodu kullanır.
+                </p>
+              )}
+            </div>
+            <div className="flex gap-3">
+              <Button type="submit" disabled={infoSubmitting}>
+                {infoSubmitting ? 'Kaydediliyor...' : 'Kaydet'}
+              </Button>
+              <Button type="button" variant="secondary" onClick={() => setShowEditInfo(false)}>
+                Vazgeç
+              </Button>
+            </div>
+          </form>
+        </Card>
+      )}
 
       <Card>
         <h2 className="mb-3 font-semibold text-slate-800">Blok / Bölge Tanımları</h2>
