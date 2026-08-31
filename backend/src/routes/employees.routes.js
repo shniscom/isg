@@ -4,7 +4,7 @@ const { eq, and, or, count, ilike, inArray, desc, asc, isNull, isNotNull, ne, sq
 const { db } = require('../db/client');
 const { employees, nonconformities, companies, userProjects, incidents } = require('../db/schema');
 const { requireAuth } = require('../middleware/auth');
-const { requireSystemAdmin } = require('../middleware/permission');
+const { requireSystemAdmin, requirePermission } = require('../middleware/permission');
 const { asyncHandler } = require('../utils/asyncHandler');
 const { ApiError } = require('../utils/apiError');
 const { logAudit } = require('../utils/audit');
@@ -55,7 +55,9 @@ async function getScopedCompanyIds(userId, projectId) {
  */
 async function resolveCompanyScope(req, projectId, requestedCompanyId) {
   let companyFilterIds = null;
-  if (!req.user.isSystemAdmin && !hasPermission(req, 'uygunsuzluk_gorme')) {
+  // İnsan Kaynakları Yönetimi yetkisi olanlar, uygunsuzluk_gorme yetkisi olanlarla aynı şekilde
+  // projedeki TÜM firmaların çalışan listesini görebilmeli (işleri zaten bu - bkz. Kullanım Kılavuzu).
+  if (!req.user.isSystemAdmin && !hasPermission(req, 'uygunsuzluk_gorme') && !hasPermission(req, 'insan_kaynaklari_yonetimi')) {
     const scoped = await getScopedCompanyIds(req.user.sub, projectId);
     if (scoped.length > 0) {
       companyFilterIds = scoped;
@@ -143,6 +145,8 @@ const EMPLOYEE_LIST_COLUMNS = {
   mykCertificateDate: employees.mykCertificateDate,
   startDate: employees.startDate,
   endDate: employees.endDate,
+  firstStartDate: employees.firstStartDate,
+  lastExitDate: employees.lastExitDate,
   isActive: employees.isActive,
   createdAt: employees.createdAt,
 };
@@ -201,7 +205,7 @@ router.get(
 router.get(
   '/duplicates',
   asyncHandler(async (req, res) => {
-    if (!req.user.isSystemAdmin) throw ApiError.forbidden('Bu raporu yalnızca sistem admini görüntüleyebilir.');
+    if (!req.user.isSystemAdmin && !hasPermission(req, 'insan_kaynaklari_yonetimi')) throw ApiError.forbidden('Bu raporu görüntüleme yetkiniz yok.');
     const projectId = resolveProjectId(req, req.query.projectId);
 
     const dupNationalIds = await db
@@ -371,7 +375,7 @@ const createSchema = z.object({
 router.post(
   '/',
   asyncHandler(async (req, res) => {
-    if (!hasPermission(req, 'uygunsuzluk_acma')) throw ApiError.forbidden();
+    if (!hasPermission(req, 'uygunsuzluk_acma') && !hasPermission(req, 'insan_kaynaklari_yonetimi')) throw ApiError.forbidden();
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz çalışan bilgisi.', parsed.error.flatten());
     const projectId = resolveProjectId(req, parsed.data.projectId);
@@ -416,6 +420,10 @@ router.post(
         startDate: toDateOrNull(parsed.data.startDate),
         endDate: toDateOrNull(endDate),
         isActive: !endDate,
+        // İlk kayıt: "ilk giriş tarihi" burada bir kere sabitlenir. Zaten çıkışlı (endDate dolu)
+        // olarak ekleniyorsa (nadir - genelde geçmiş kayıt girişi) en son çıkış tarihi de aynı anda set edilir.
+        firstStartDate: toDateOrNull(parsed.data.startDate),
+        lastExitDate: endDate ? toDateOrNull(endDate) : null,
       })
       .returning();
 
@@ -457,7 +465,7 @@ const updateSchema = z.object({
 router.patch(
   '/:id',
   asyncHandler(async (req, res) => {
-    if (!hasPermission(req, 'uygunsuzluk_acma')) throw ApiError.forbidden();
+    if (!hasPermission(req, 'uygunsuzluk_acma') && !hasPermission(req, 'insan_kaynaklari_yonetimi')) throw ApiError.forbidden();
     const [employee] = await db.select().from(employees).where(eq(employees.id, req.params.id)).limit(1);
     if (!employee) throw ApiError.notFound('Çalışan bulunamadı.');
 
@@ -489,6 +497,21 @@ router.patch(
       // Çıkış tarihi girilirse çalışan otomatik arşive alınır; temizlenirse yeniden aktif olur.
       values.isActive = !endDateRaw;
       values.endDate = toDateOrNull(endDateRaw);
+      if (endDateRaw) {
+        // Arşivleniyor: en son çıkış tarihini kalıcı olarak sakla (bkz. schema.js employees.lastExitDate
+        // yorumu) - bu değer, çalışan sonradan yeniden aktif edilip endDate temizlense bile kaybolmaz.
+        values.lastExitDate = values.endDate;
+      } else if (employee.isActive === false) {
+        // Yeniden aktif ediliyor (daha önce arşivdeydi) - bu "yeniden giriş" anıdır. lastExitDate
+        // bilinçli olarak DOKUNULMADAN bırakılır (geçmiş çıkış bilgisi kaybolmasın diye); startDate
+        // zaten yukarıda (girildiyse) güncellenmiş olur ve "yeniden giriş tarihi" olarak gösterilir.
+      }
+    }
+    // Güvenlik ağı: eski (bu özellikten önce oluşturulmuş, migration backfill'ini bir şekilde
+    // kaçırmış) kayıtlarda firstStartDate hâlâ boşsa, ilk kez bir giriş tarihi belli olduğunda set edilir.
+    if (!employee.firstStartDate) {
+      const effectiveStartDate = values.startDate !== undefined ? values.startDate : employee.startDate;
+      if (effectiveStartDate) values.firstStartDate = effectiveStartDate;
     }
 
     const [updated] = await db.update(employees).set(values).where(eq(employees.id, employee.id)).returning();
@@ -513,7 +536,7 @@ router.patch(
 // ---------------------------------------------------------------------------
 router.delete(
   '/:id',
-  requireSystemAdmin,
+  requirePermission('insan_kaynaklari_yonetimi'),
   asyncHandler(async (req, res) => {
     const [employee] = await db.select().from(employees).where(eq(employees.id, req.params.id)).limit(1);
     if (!employee) throw ApiError.notFound('Çalışan bulunamadı.');
@@ -540,7 +563,7 @@ const bulkDeleteSchema = z.object({
 
 router.post(
   '/bulk-delete',
-  requireSystemAdmin,
+  requirePermission('insan_kaynaklari_yonetimi'),
   asyncHandler(async (req, res) => {
     const parsed = bulkDeleteSchema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz istek.', parsed.error.flatten());
@@ -625,7 +648,7 @@ const importSchema = z.object({
 
 router.post(
   '/import',
-  requireSystemAdmin,
+  requirePermission('insan_kaynaklari_yonetimi'),
   asyncHandler(async (req, res) => {
     const parsed = importSchema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz içe aktarma verisi.', parsed.error.flatten());
@@ -638,6 +661,7 @@ router.post(
     let created = 0;
     let updated = 0;
     let archived = 0;
+    let rejoined = 0;
     let skipped = 0;
     const errors = [];
     const seenKeys = new Set();
@@ -682,6 +706,19 @@ router.post(
         };
 
         if (existingRow) {
+          // Bu kişi daha önce (bu firmada) arşivdeyse, yeni listede tekrar görünmesi "yeniden
+          // giriş" anlamına gelir: aktif edilir, mevcut çıkış tarihi temizlenir - ama en son
+          // çıkış tarihi (lastExitDate) BİLİNÇLİ OLARAK values'a dahil edilmez, DB'deki değeri
+          // korunur (bkz. schema.js employees.lastExitDate yorumu / Kullanım Kılavuzu).
+          const wasInactive = existingRow.isActive === false;
+          if (wasInactive) {
+            values.isActive = true;
+            values.endDate = null;
+            rejoined += 1;
+          }
+          if (!existingRow.firstStartDate && values.startDate) {
+            values.firstStartDate = values.startDate;
+          }
           await db.update(employees).set(values).where(eq(employees.id, existingRow.id));
           updated += 1;
           const merged = { ...existingRow, ...values };
@@ -690,7 +727,7 @@ router.post(
         } else {
           const [createdRow] = await db
             .insert(employees)
-            .values({ projectId, companyId, isActive: true, ...values })
+            .values({ projectId, companyId, isActive: true, firstStartDate: values.startDate, lastExitDate: null, ...values })
             .returning();
           created += 1;
           byNationalId.set(nationalId, createdRow);
@@ -706,7 +743,10 @@ router.post(
     for (const emp of existing) {
       const key = emp.nationalId || emp.fullName.trim().toLowerCase();
       if (emp.isActive && !seenKeys.has(key)) {
-        await db.update(employees).set({ isActive: false, endDate: null }).where(eq(employees.id, emp.id));
+        // Yeni listede artık görünmüyor - tarihsiz (belirsiz) olarak arşive alınır; en son çıkış
+        // tarihi de bilinmediği için null'a çekilir (bkz. Kullanım Kılavuzu Çalışanlar bölümü:
+        // admin/İK bu çalışanlar için Çalışanlar > Arşiv sekmesinden gerçek çıkış tarihini girmeli).
+        await db.update(employees).set({ isActive: false, endDate: null, lastExitDate: null }).where(eq(employees.id, emp.id));
         archived += 1;
       }
     }
@@ -716,11 +756,21 @@ router.post(
       action: 'EMPLOYEE_IMPORT',
       entityType: 'employee',
       entityId: companyId,
-      details: { projectId, companyId, created, updated, archived, skipped },
+      details: { projectId, companyId, created, updated, archived, rejoined, skipped },
       ipAddress: req.ip,
     });
 
-    res.json({ created, updated, archived, skipped, errors });
+    res.json({
+      created,
+      updated,
+      archived,
+      rejoined,
+      skipped,
+      errors,
+      // Frontend'de belirgin bir uyarı göstermek için: içe aktarma sonrası tarihsiz arşivlenen
+      // kişi varsa admin/İK gerçek çıkış tarihlerini elle girmeye teşvik edilmeli.
+      needsExitDateReview: archived > 0,
+    });
   })
 );
 

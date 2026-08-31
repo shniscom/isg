@@ -256,9 +256,17 @@ const employees = pgTable('employees', {
   isgRole: text('isg_role'), // İSG görevi (ör. Çalışan Temsilcisi)
   mykCertificateNo: text('myk_certificate_no'), // MYK mesleki yeterlilik belge no
   mykCertificateDate: timestamp('myk_certificate_date', { withTimezone: true }), // MYK belgesinin alındığı tarih
-  startDate: timestamp('start_date', { withTimezone: true }), // işe giriş tarihi
+  startDate: timestamp('start_date', { withTimezone: true }), // işe giriş tarihi (yeniden işe girişte bu alan güncellenir - "yeniden giriş tarihi")
   endDate: timestamp('end_date', { withTimezone: true }), // işten çıkış tarihi (doluysa arşivde sayılır)
   isActive: boolean('is_active').notNull().default(true),
+  // İlk giriş/çıkış geçmişi (bkz. "Kullanım Kılavuzu" > Çalışanlar > Yeniden İşe Alım):
+  // firstStartDate bir çalışan kaydı ilk oluşturulduğunda bir kere set edilir, sonrasında asla
+  // değişmez ("ilk giriş tarihi"). lastExitDate ise her arşivlenme (isActive true->false) anında
+  // endDate ile birlikte güncellenir ve - endDate reaktivasyonda temizlense (null'a dönse) bile -
+  // kalıcı olarak saklanır, böylece bir çalışan yeniden işe alındığında ("yeniden giriş") kartında
+  // hem ilk giriş hem en son çıkış hem de yeni giriş tarihi birlikte gösterilebilir.
+  firstStartDate: timestamp('first_start_date', { withTimezone: true }),
+  lastExitDate: timestamp('last_exit_date', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index('employees_project_idx').on(table.projectId),

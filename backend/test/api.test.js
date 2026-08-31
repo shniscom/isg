@@ -59,6 +59,7 @@ test.before(async () => {
     { key: 'firma_yonetme', name: 'Firma Yönetme' },
     { key: 'firma_goruntuleme', name: 'Firmaları Görüntüleme' },
     { key: 'kaza_bildirimi', name: 'Kaza / Ramak Kala Bildirimi Girme' },
+    { key: 'insan_kaynaklari_yonetimi', name: 'İnsan Kaynakları Yönetimi' },
   ]);
 
   await db.insert(schema.users).values({
@@ -2872,6 +2873,45 @@ test('kullanıcılar: roster (çalışan listesi) içinden seçim - aday listesi
   assert.equal(offRoster.body.user.employeeId, null);
 });
 
+test('kullanıcılar: roster seçiminde firma filtresi - roster-companies ve employee-candidates?companyId', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Test Şantiyesi 31', code: 'TST-031' } });
+  const projectId = proj.body.project.id;
+  const companyA = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Filtre Firması A', type: 'TASERON' } });
+  const companyAId = companyA.body.company.id;
+  const companyB = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Filtre Firması B', type: 'TASERON' } });
+  const companyBId = companyB.body.company.id;
+
+  const empA = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId: companyAId, fullName: 'Firma A Çalışanı', nationalId: '77777777770', position: 'Usta' },
+  });
+  const empB = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId: companyBId, fullName: 'Firma B Çalışanı', nationalId: '88888888880', position: 'Usta' },
+  });
+
+  // Firma listesi: projedeki her iki firma da (aktif) görünmeli.
+  const companiesRes = await api('GET', `/admin/users/roster-companies?projectId=${projectId}`, { token: adminToken });
+  assert.equal(companiesRes.status, 200);
+  assert.deepEqual(
+    companiesRes.body.companies.map((c) => c.id).sort(),
+    [companyAId, companyBId].sort()
+  );
+
+  // companyId verilmeden: her iki firmanın çalışanı da listelenir.
+  const allCandidates = await api('GET', `/admin/users/employee-candidates?projectId=${projectId}`, { token: adminToken });
+  assert.ok(allCandidates.body.employees.some((e) => e.id === empA.body.employee.id));
+  assert.ok(allCandidates.body.employees.some((e) => e.id === empB.body.employee.id));
+
+  // companyId=A verilince yalnızca A firmasının çalışanı dönmeli.
+  const filteredA = await api('GET', `/admin/users/employee-candidates?projectId=${projectId}&companyId=${companyAId}`, {
+    token: adminToken,
+  });
+  assert.equal(filteredA.status, 200);
+  assert.ok(filteredA.body.employees.some((e) => e.id === empA.body.employee.id));
+  assert.ok(!filteredA.body.employees.some((e) => e.id === empB.body.employee.id));
+});
+
 test('kullanıcılar: silme yerine arşivleme - EXIT modu (bağlı çalışan da arşive alınır) + açık uygunsuzluk devri', async () => {
   const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Test Şantiyesi 27', code: 'TST-027' } });
   const projectId = proj.body.project.id;
@@ -2984,4 +3024,138 @@ test('kullanıcılar: silme yerine arşivleme - ROLE_CHANGE modu (yalnızca hesa
   assert.equal(userAfter.body.user.isActive, false);
   // Proje ataması deaktive edilmiş olmalı.
   assert.ok(userAfter.body.assignments.every((a) => a.isActive === false));
+});
+
+test('çalışanlar: giriş/çıkış geçmişi - ilk giriş sabit kalır, manuel çıkış+yeniden içe aktarma ile giriş "yeniden giriş" olarak güncellenir, en son çıkış tarihi korunur', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Test Şantiyesi 29', code: 'TST-029' } });
+  const projectId = proj.body.project.id;
+  const company = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Geçmiş Testi Firması', type: 'TASERON' } });
+  const companyId = company.body.company.id;
+
+  // İlk içe aktarma: X ilk kez giriyor.
+  const firstImport = await api('POST', '/employees/import', {
+    token: adminToken,
+    body: {
+      projectId,
+      companyId,
+      rows: [{ fullName: 'Tekrar Giren Çalışan', nationalId: '99999999990', position: 'Usta', startDate: '2024-01-10' }],
+    },
+  });
+  assert.equal(firstImport.status, 200);
+  assert.equal(firstImport.body.created, 1);
+
+  const afterFirst = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&status=active`, { token: adminToken });
+  const empId = afterFirst.body.employees[0].id;
+  assert.equal(afterFirst.body.employees[0].firstStartDate.slice(0, 10), '2024-01-10');
+  assert.equal(afterFirst.body.employees[0].lastExitDate, null);
+
+  // Manuel çıkış: gerçek bir çıkış tarihiyle arşivleniyor.
+  const exit = await api('PATCH', `/employees/${empId}`, { token: adminToken, body: { endDate: '2024-06-01' } });
+  assert.equal(exit.status, 200);
+  assert.equal(exit.body.employee.isActive, false);
+
+  const afterExit = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&status=archived`, { token: adminToken });
+  const archivedRow = afterExit.body.employees.find((e) => e.id === empId);
+  assert.equal(archivedRow.endDate.slice(0, 10), '2024-06-01');
+  assert.equal(archivedRow.lastExitDate.slice(0, 10), '2024-06-01');
+  assert.equal(archivedRow.firstStartDate.slice(0, 10), '2024-01-10');
+
+  // Yeniden içe aktarma: aynı kişi (aynı TC) yeni bir giriş tarihiyle tekrar listede -> "yeniden giriş".
+  const rejoinImport = await api('POST', '/employees/import', {
+    token: adminToken,
+    body: {
+      projectId,
+      companyId,
+      rows: [{ fullName: 'Tekrar Giren Çalışan', nationalId: '99999999990', position: 'Usta', startDate: '2025-01-15' }],
+    },
+  });
+  assert.equal(rejoinImport.status, 200);
+  assert.equal(rejoinImport.body.rejoined, 1);
+  assert.equal(rejoinImport.body.updated, 1);
+
+  const afterRejoin = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&status=active`, { token: adminToken });
+  const rejoinedRow = afterRejoin.body.employees.find((e) => e.id === empId);
+  assert.ok(rejoinedRow, 'çalışan tekrar aktif listede görünmeli');
+  assert.equal(rejoinedRow.startDate.slice(0, 10), '2025-01-15'); // yeniden giriş tarihi
+  assert.equal(rejoinedRow.firstStartDate.slice(0, 10), '2024-01-10'); // ilk giriş tarihi değişmedi
+  assert.equal(rejoinedRow.lastExitDate.slice(0, 10), '2024-06-01'); // en son çıkış tarihi korundu
+  assert.equal(rejoinedRow.endDate, null); // şu an aktif, güncel çıkış tarihi yok
+
+  // Ayrı bir çalışan: yeni listede hiç görünmeyince tarihsiz arşivlenmeli ve uyarı bayrağı dönmeli.
+  await api('POST', '/employees/import', {
+    token: adminToken,
+    body: {
+      projectId,
+      companyId,
+      rows: [
+        { fullName: 'Tekrar Giren Çalışan', nationalId: '99999999990', position: 'Usta', startDate: '2025-01-15' },
+        { fullName: 'Kaybolan Çalışan', nationalId: '88888888880', position: 'Formen', startDate: '2024-03-01' },
+      ],
+    },
+  });
+  const droppedImport = await api('POST', '/employees/import', {
+    token: adminToken,
+    body: {
+      projectId,
+      companyId,
+      rows: [{ fullName: 'Tekrar Giren Çalışan', nationalId: '99999999990', position: 'Usta', startDate: '2025-01-15' }],
+    },
+  });
+  assert.equal(droppedImport.status, 200);
+  assert.equal(droppedImport.body.archived, 1);
+  assert.equal(droppedImport.body.needsExitDateReview, true);
+
+  const afterDropped = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&status=archived`, { token: adminToken });
+  const droppedRow = afterDropped.body.employees.find((e) => e.fullName === 'Kaybolan Çalışan');
+  assert.equal(droppedRow.endDate, null);
+  assert.equal(droppedRow.lastExitDate, null);
+});
+
+test('çalışanlar: İnsan Kaynakları Yönetimi yetkisi olan (admin olmayan) kullanıcı Excel içe aktarma ve silme yapabilir', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Test Şantiyesi 30', code: 'TST-030' } });
+  const projectId = proj.body.project.id;
+  const company = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'İK Yetkisi Test Firması', type: 'TASERON' } });
+  const companyId = company.body.company.id;
+
+  const rolesRes = await api('GET', '/admin/roles', { token: adminToken });
+  const roleId = rolesRes.body.roles[0].id;
+  const permsRes = await api('GET', '/admin/permissions', { token: adminToken });
+  const hrPermId = permsRes.body.permissions.find((p) => p.key === 'insan_kaynaklari_yonetimi').id;
+  assert.ok(hrPermId, 'insan_kaynaklari_yonetimi yetkisi seed listesinde bulunmalı');
+
+  const hrUser = await api('POST', '/admin/users', { token: adminToken, body: { fullName: 'İK Görevlisi', username: 'ik.gorevlisi' } });
+  const hrUserId = hrUser.body.user.id;
+  await api('POST', `/admin/users/${hrUserId}/projects`, { token: adminToken, body: { projectId, roleId } });
+  await api('POST', `/admin/users/${hrUserId}/permissions`, { token: adminToken, body: { permissionId: hrPermId, projectId } });
+
+  const login = await api('POST', '/auth/login', { body: { username: 'ik.gorevlisi', password: hrUser.body.tempPassword } });
+  const select = await api('POST', '/auth/select-context', { body: { contextToken: login.body.contextToken, projectId, roleId } });
+  const hrToken = select.body.accessToken;
+  assert.ok(select.body.context.permissions.includes('insan_kaynaklari_yonetimi'));
+
+  // uygunsuzluk_acma yetkisi OLMADAN, yalnızca İK yetkisiyle içe aktarma yapabilmeli.
+  const importRes = await api('POST', '/employees/import', {
+    token: hrToken,
+    body: { companyId, rows: [{ fullName: 'İK ile Eklenen', nationalId: '77777777771', position: 'Usta', startDate: '2024-01-01' }] },
+  });
+  assert.equal(importRes.status, 200);
+  assert.equal(importRes.body.created, 1);
+
+  const list = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&status=active`, { token: hrToken });
+  const empId = list.body.employees.find((e) => e.fullName === 'İK ile Eklenen').id;
+
+  // Tekil ekleme de İK yetkisiyle çalışmalı.
+  const singleAdd = await api('POST', '/employees', {
+    token: hrToken,
+    body: { companyId, fullName: 'İK Tekil Ekleme', nationalId: '77777777772', position: 'Formen', startDate: '2024-02-01' },
+  });
+  assert.equal(singleAdd.status, 201);
+
+  // Silme de İK yetkisiyle çalışmalı.
+  const del = await api('DELETE', `/employees/${empId}`, { token: hrToken });
+  assert.equal(del.status, 200);
+
+  // Çoklu firma çalışan tespiti raporunu da görebilmeli.
+  const duplicates = await api('GET', `/employees/duplicates?projectId=${projectId}`, { token: hrToken });
+  assert.equal(duplicates.status, 200);
 });

@@ -36,6 +36,11 @@ const DEFAULT_PERMISSIONS = [
   { key: 'firma_goruntuleme', name: 'Firmaları Görüntüleme', description: 'Firma bilgilerini/kartlarını görüntüleyebilir ama ekleyip/düzenleyemez.' },
   { key: 'proje_yonetme', name: 'Proje Yönetme' },
   { key: 'kaza_bildirimi', name: 'Kaza / Ramak Kala Bildirimi Girme' },
+  {
+    key: 'insan_kaynaklari_yonetimi',
+    name: 'İnsan Kaynakları Yönetimi',
+    description: 'Çalışan (personel) listelerini firma bazında ekleyip/güncelleyip/çıkış işlemi yapabilir - Çalışanlar sekmesine tam erişim verir.',
+  },
 ];
 
 // Firma rolü tipi kataloğu (company_role_types). Migration 0013 bu satırları FK constraint

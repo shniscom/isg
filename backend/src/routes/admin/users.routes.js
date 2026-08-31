@@ -95,11 +95,16 @@ router.get(
 // için, henüz hiçbir kullanıcıya bağlanmamış aktif çalışanları döner. Böyle bir çalışan seçilirse
 // kullanıcı doğrudan oluşturulur; seçilmezse (roster dışı) POST / bunu kritik işlem sayıp admin
 // onayına yönlendirir - bkz. POST / ve services/criticalActions.service.js executeUserCreate.
+// ?companyId= verilirse liste yalnızca o firmanın çalışanlarına daraltılır (mobilde/çok
+// çalışanlı projelerde tek bir uzun listeyi taramak yerine önce firma seçilip liste küçültülür).
 // ---------------------------------------------------------------------------
 router.get(
   '/employee-candidates',
   asyncHandler(async (req, res) => {
     if (!req.query.projectId) throw ApiError.badRequest('projectId parametresi zorunludur.');
+
+    const conditions = [eq(employees.projectId, req.query.projectId), eq(employees.isActive, true), isNull(users.id)];
+    if (req.query.companyId) conditions.push(eq(employees.companyId, req.query.companyId));
 
     const rows = await db
       .select({
@@ -113,10 +118,31 @@ router.get(
       .from(employees)
       .leftJoin(companies, eq(employees.companyId, companies.id))
       .leftJoin(users, eq(users.employeeId, employees.id))
-      .where(and(eq(employees.projectId, req.query.projectId), eq(employees.isActive, true), isNull(users.id)))
+      .where(and(...conditions))
       .orderBy(employees.fullName);
 
     res.json({ employees: rows });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Yukarıdaki roster seçicisinde "önce firma seç, sonra çalışan ara" akışı için firma listesi.
+// /admin/companies ucundan farklı olarak firma_yonetme/firma_goruntuleme değil, bu router'ın
+// zaten gerektirdiği kullanici_yonetme yetkisiyle çalışır - kullanıcı ekleyen herkes firma
+// listesini görebilmeli, ayrıca firma yetkisi gerekmemeli.
+// ---------------------------------------------------------------------------
+router.get(
+  '/roster-companies',
+  asyncHandler(async (req, res) => {
+    if (!req.query.projectId) throw ApiError.badRequest('projectId parametresi zorunludur.');
+
+    const rows = await db
+      .select({ id: companies.id, name: companies.name })
+      .from(companies)
+      .where(and(eq(companies.projectId, req.query.projectId), eq(companies.isActive, true)))
+      .orderBy(companies.name);
+
+    res.json({ companies: rows });
   })
 );
 
@@ -319,7 +345,7 @@ router.post(
 
       if (parsed.data.mode === 'EXIT') {
         const endDate = parsed.data.endDate ? new Date(parsed.data.endDate) : new Date();
-        await tx.update(employees).set({ endDate, isActive: false }).where(eq(employees.id, user.employeeId));
+        await tx.update(employees).set({ endDate, isActive: false, lastExitDate: endDate }).where(eq(employees.id, user.employeeId));
       }
     });
 
