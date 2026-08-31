@@ -259,27 +259,31 @@ const TOPICS = [
   {
     id: 'kullanici-arsivleme',
     icon: '📦',
-    title: 'Kullanıcı Arşivleme',
-    summary: 'Kullanıcılar silinmez; "Çıkış" ya da "Görev Değişikliği" modlarıyla arşivlenir.',
+    title: 'Kullanıcı Arşivleme ve Silme',
+    summary: 'Kaydı olan kullanıcılar arşivlenir; hiç kaydı olmayan kullanıcılar kalıcı olarak silinebilir.',
     sections: [
       {
         heading: 'Genel',
-        paragraphs: ['Bu programda kullanıcı hesapları silinmez, arşivlenir. Kullanıcı detay sayfasında "Arşivle" kartı bulunur (kendi hesabınız ve zaten pasif olan kullanıcılar için bu kart gizlenir).'],
+        paragraphs: ['Kullanıcı detay sayfasında "Sistem Kayıtları" kartı, o kişinin açtığı/atandığı uygunsuzluk, ceza, düzeltme, kaza kaydı gibi tüm geçmişinin özetini gösterir. Bu özete göre ya kalıcı silme ya da arşivleme seçeneği sunulur (kendi hesabınız ve sistem adminleri için bu kart gizlenir).'],
       },
       {
-        heading: 'Açık kayıt kontrolü',
-        paragraphs: ['Arşivlemeden önce sistem, kullanıcının üzerinde açık uygunsuzluk ataması olup olmadığını kontrol eder. Varsa uyarı gösterilir ve arşivleme işlemine devam etmeden önce bu kayıtları başka bir kullanıcıya yeniden atayabilirsiniz.'],
+        heading: 'Kalıcı silme (kayıtsız kullanıcı)',
+        paragraphs: ['Bir kullanıcının sistemde hiç kaydı yoksa (hiç uygunsuzluk açmamış/atanmamış, ceza/düzeltme/kaza kaydı vb. yoksa), "Sistem Kayıtları" kartında doğrudan "Kullanıcıyı Sil" butonu çıkar. Bu, geri alınamaz kalıcı bir silme işlemidir; kaydı olmayan, yanlışlıkla eklenmiş ya da hiç kullanılmamış hesapları listede gereksiz yere tutmamak için kullanılır. Kaydı olan bir kullanıcı için bu buton görünmez — onun yerine arşivleme kullanılır.'],
       },
       {
-        heading: 'İki mod',
+        heading: 'Arşivleme (kaydı olan kullanıcı) — iki mod',
         bullets: [
           'Çıkış — kişi hem sistemden hem firmadan ayrılıyorsa kullanılır. Çıkış Tarihi girilir; hem kullanıcı hesabı hem (varsa) bağlı çalışan kaydı birlikte arşivlenir.',
           'Görev değişikliği — kişi firmada çalışmaya devam ediyor ama artık bu sistemi kullanmayacaksa / farklı bir göreve geçtiyse kullanılır. Yalnızca kullanıcı hesabı pasifleşir, tüm yetki ve proje atamaları kaldırılır; bağlı çalışan kaydına dokunulmaz.',
         ],
       },
       {
+        heading: 'Açık kayıtların devri',
+        paragraphs: ['Arşivlemeden önce sistem, kullanıcının üzerinde açık uygunsuzluk ataması olup olmadığını gösterir; isterseniz bunları arşivlemeden önce belirli bir kişiye devredebilirsiniz. Elle devretmediğiniz kayıtlar sahipsiz kalmaz — arşivleme tamamlanırken otomatik olarak işlemi yapan admine (size) devredilir; sonrasında bunları Uygunsuzluklar sekmesinden uygun gördüğünüz kişiye yeniden atayabilir ya da orada yönetebilirsiniz.'],
+      },
+      {
         heading: 'Sonuç',
-        paragraphs: ['Arşivlenen kullanıcı, detay sayfasında "Arşivde / Pasif" rozetiyle işaretlenir ve artık sisteme giriş yapamaz.'],
+        paragraphs: ['Arşivlenen kullanıcı, detay sayfasında "Arşivde / Pasif" rozetiyle işaretlenir. Arşivleme ya da silme işleminden sonra kişi artık sisteme giriş yapamaz — elinde geçerli bir oturum (token) olsa bile bir sonraki isteğinde anında engellenir, oturumunun kendiliğinden sona ermesini beklemek gerekmez.'],
       },
     ],
   },

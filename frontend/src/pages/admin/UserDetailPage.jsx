@@ -1,15 +1,40 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import apiClient, { getErrorMessage } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
 import { Card, Button, Select, Alert, Badge } from '../../components/ui';
 import { PERMISSION_DESCRIPTIONS, PERMISSION_CATEGORIES } from '../../lib/permissions';
 
+// GET /admin/users/:id recordCounts alanındaki anahtarların Türkçe etiketleri - kayıt özeti ve
+// kalıcı silme uygunluğu bu kayımlara göre belirlenir (bkz. backend getUserRecordCounts).
+const RECORD_COUNT_LABELS = [
+  ['opened', 'Açtığı uygunsuzluk'],
+  ['assigned', 'Atandığı uygunsuzluk'],
+  ['corrections', 'Gönderdiği/incelediği düzeltme'],
+  ['photos', 'Yüklediği fotoğraf'],
+  ['statusHistory', 'Durum değişikliği kaydı'],
+  ['penalties', 'Ceza talebi/kararı'],
+  ['dueDateExtensions', 'Termin uzatma talebi/kararı'],
+  ['incidents', 'Kaza/ramak kala kaydı'],
+  ['companyDocuments', 'Yüklediği firma belgesi'],
+  ['boardMeetings', 'Oluşturduğu İSG kurul tutanağı'],
+  ['equipment', 'Kaydettiği ekipman'],
+  ['companyRoleAssignments', 'Yaptığı firma rolü ataması'],
+  ['archives', 'Arşiv işlemi'],
+  ['pendingApprovals', 'Onay talebi/kararı'],
+];
+
 export function UserDetailPage() {
   const { id } = useParams();
   const { user: authUser } = useAuth();
+  const navigate = useNavigate();
   const [user, setUser] = useState(null);
   const [stats, setStats] = useState(null);
+  const [recordCounts, setRecordCounts] = useState(null);
+  const [canDelete, setCanDelete] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
   const [assignments, setAssignments] = useState([]);
   const [permissions, setPermissions] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -52,6 +77,8 @@ export function UserDetailPage() {
       ]);
       setUser(userRes.data.user);
       setStats(userRes.data.stats);
+      setRecordCounts(userRes.data.recordCounts);
+      setCanDelete(userRes.data.canDelete);
       setAssignments(userRes.data.assignments);
       setPermissions(userRes.data.permissions);
       setProjects(projectsRes.data.projects);
@@ -268,14 +295,30 @@ export function UserDetailPage() {
         .map(([nonconformityId, newAssigneeUserId]) => ({ nonconformityId, newAssigneeUserId }));
       const payload = { mode, reassignments: reassignmentList };
       if (mode === 'EXIT') payload.endDate = archiveEndDate;
-      await apiClient.post(`/admin/users/${id}/archive`, payload);
+      const { data } = await apiClient.post(`/admin/users/${id}/archive`, payload);
       setArchiveOpen(false);
-      setNotice(mode === 'EXIT' ? 'Kullanıcı ve bağlı çalışan kaydı çıkış olarak arşivlendi.' : 'Kullanıcı hesabı görev değişikliği nedeniyle arşivlendi.');
+      const baseMessage = mode === 'EXIT' ? 'Kullanıcı ve bağlı çalışan kaydı çıkış olarak arşivlendi.' : 'Kullanıcı hesabı görev değişikliği nedeniyle arşivlendi.';
+      const transferNote = data.autoTransferredCount > 0
+        ? ` Elle devretmediğiniz ${data.autoTransferredCount} açık uygunsuzluk ataması otomatik olarak size devredildi; Uygunsuzluklar sekmesinden uygun gördüğünüz kişiye yeniden atayabilirsiniz.`
+        : '';
+      setNotice(baseMessage + transferNote);
       await load();
     } catch (err) {
       setArchiveError(getErrorMessage(err));
     } finally {
       setArchiveSubmitting(null);
+    }
+  }
+
+  async function handleDelete() {
+    setDeleteSubmitting(true);
+    setDeleteError(null);
+    try {
+      await apiClient.delete(`/admin/users/${id}`);
+      navigate('/admin/kullanicilar');
+    } catch (err) {
+      setDeleteError(getErrorMessage(err));
+      setDeleteSubmitting(false);
     }
   }
 
@@ -322,6 +365,56 @@ export function UserDetailPage() {
               <div className="text-xs text-amber-700">Üzerinde Açık</div>
             </div>
           </div>
+        </Card>
+      )}
+
+      {!user.isSystemAdmin && authUser?.id !== user.id && recordCounts && (
+        <Card className={canDelete ? 'space-y-3 border-red-200' : 'space-y-3'}>
+          <h2 className="font-semibold text-slate-800">Sistem Kayıtları</h2>
+          {recordCounts.total === 0 ? (
+            <p className="text-sm text-slate-500">
+              Bu kullanıcının sistemde hiç kaydı yok (hiç uygunsuzluk açmamış/atanmamış, ceza, düzeltme, kaza kaydı
+              vb. yok).
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-2 text-xs text-slate-600">
+              {RECORD_COUNT_LABELS.filter(([key]) => recordCounts[key] > 0).map(([key, label]) => (
+                <span key={key} className="rounded-full bg-slate-100 px-3 py-1">
+                  {label}: <strong>{recordCounts[key]}</strong>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {canDelete ? (
+            <div className="border-t border-slate-100 pt-3">
+              {deleteError && <Alert>{deleteError}</Alert>}
+              {!deleteConfirmOpen ? (
+                <Button variant="danger" onClick={() => setDeleteConfirmOpen(true)}>
+                  Kullanıcıyı Sil
+                </Button>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-red-700">
+                    Bu işlem geri alınamaz. "{user.fullName}" kullanıcısı kalıcı olarak silinecek. Emin misiniz?
+                  </p>
+                  <div className="flex gap-2">
+                    <Button variant="danger" onClick={handleDelete} disabled={deleteSubmitting}>
+                      {deleteSubmitting ? 'Siliniyor...' : 'Evet, Kalıcı Olarak Sil'}
+                    </Button>
+                    <Button variant="secondary" onClick={() => setDeleteConfirmOpen(false)} disabled={deleteSubmitting}>
+                      Vazgeç
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="border-t border-slate-100 pt-3 text-xs text-slate-400">
+              Bu kullanıcının sistem kayıtları olduğu için kalıcı olarak silinemez; bunun yerine aşağıdan
+              arşivleyebilirsiniz.
+            </p>
+          )}
         </Card>
       )}
 
@@ -608,8 +701,8 @@ export function UserDetailPage() {
                     <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
                       <p className="text-sm font-medium text-amber-800">
                         ⚠️ Bu kullanıcının üzerinde {archiveCheck.openNonconformities.length} açık uygunsuzluk var.
-                        Arşivlemeden önce isterseniz başka birine devredin (devretmezseniz kayıt arşivlenen
-                        kullanıcı üzerinde kalmaya devam eder, kaybolmaz).
+                        İsterseniz aşağıdan doğrudan başka birine devredin; devretmediklerinizi sistem arşivleme
+                        sırasında otomatik olarak size (işlemi yapan admine) devreder - hiçbir kayıt sahipsiz kalmaz.
                       </p>
                       <div className="space-y-2">
                         {archiveCheck.openNonconformities.map((nc) => (
