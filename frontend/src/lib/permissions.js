@@ -20,6 +20,7 @@ export const PERMISSION_DESCRIPTIONS = {
   proje_yonetme: 'Proje ve proje içi blok/bölge tanımlarını yönetebilir.',
   kaza_bildirimi: 'Firmalara kaza / ramak kala kaydı girebilir ve girilen kayıtları görüntüleyebilir (düzenleme/silme için Firma Yönetme yetkisi gerekir).',
   insan_kaynaklari_yonetimi: 'Çalışanlar sekmesine tam erişim: firma bazında çalışan ekleyebilir, Excel ile toplu liste yükleyebilir, çıkış/arşiv işlemi yapabilir.',
+  gecici_gorevlendirme_yonetimi: 'Sahaya geçici görevle giren firma ve çalışan kayıtlarını oluşturabilir/düzenleyebilir (admin dışında yapılan değişiklikler admin onayına düşer).',
 };
 
 // Yetkileri "Yetkilerim" sayfasında düzenli göstermek için kategori grupları.
@@ -70,6 +71,6 @@ export const PERMISSION_CATEGORIES = [
   {
     title: 'İnsan Kaynakları',
     icon: '🧑\u200d💼',
-    keys: ['insan_kaynaklari_yonetimi'],
+    keys: ['insan_kaynaklari_yonetimi', 'gecici_gorevlendirme_yonetimi'],
   },
 ];

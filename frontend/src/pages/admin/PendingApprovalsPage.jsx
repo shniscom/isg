@@ -14,6 +14,9 @@ const ACTION_LABELS = {
   PENALTY_APPROVE: 'Ceza Onaylama',
   PENALTY_REJECT: 'Ceza Reddetme',
   USER_CREATE: 'Roster Dışı Kullanıcı Ekleme',
+  COMPANY_CREATE: 'Geçici Görevlendirme Firması Ekleme',
+  TEMP_EMPLOYEE_CREATE: 'Geçici Görevlendirme Çalışanı Ekleme',
+  TEMP_EMPLOYEE_UPDATE: 'Geçici Görevlendirme Çalışanı Düzenleme',
 };
 
 const TABS = ['BEKLEMEDE', 'ONAYLANDI', 'REDDEDILDI'];

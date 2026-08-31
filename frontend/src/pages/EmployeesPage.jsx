@@ -28,16 +28,50 @@ function StatusChip({ chip }) {
   return <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${CHIP_TONE_CLASS[chip.tone] || CHIP_TONE_CLASS.default}`}>{chip.text}</span>;
 }
 
+const EMPTY_TEMP_EMPLOYEE = {
+  fullName: '',
+  nationalId: '',
+  position: '',
+  startDate: '',
+  endDate: '',
+  assignmentFormExists: false,
+  sgkEntryDocExists: false,
+  isgTrainingDate: '',
+  isgTrainingExpiryDate: '',
+  orientationTrainingDate: '',
+  ppeHandoverDocExists: false,
+};
+
 export function EmployeesPage() {
-  const { user, hasPermission } = useAuth();
+  const { user, hasPermission, context } = useAuth();
   // Admin ile aynı şekilde tam yazma yetkisi (ekleme/Excel içe aktarma/arşivleme): sistem admini
   // ya da İnsan Kaynakları Yönetimi yetkisi olan kişiler - bkz. backend employees.routes.js.
   const canManageEmployees = user?.isSystemAdmin || hasPermission('insan_kaynaklari_yonetimi');
+  // Geçici görevlendirme firma/çalışan kayıtlarını oluşturma-düzenleme yetkisi (bkz. backend
+  // employees.routes.js + admin/companies.routes.js - admin dışındaki değişiklikler admin
+  // onayına gider). insan_kaynaklari_yonetimi/uygunsuzluk_acma yetkisi olanlar zaten her firmaya
+  // (temp dahil) erişebildiği için onlar da bu kapsamda sayılır.
+  const canManageTemp = canManageEmployees || hasPermission('gecici_gorevlendirme_yonetimi');
   const fileInputRef = useRef(null);
 
   const [adminProjects, setAdminProjects] = useState(null);
   const [adminProjectId, setAdminProjectId] = useState('');
   const activeProjectId = user?.isSystemAdmin ? adminProjectId : 'self';
+  // /admin/companies gibi projectId body alanı zorunlu olan uçlar için gerçek proje id'si
+  // ('self' burada işe yaramaz - bkz. resolveProjectId).
+  const effectiveProjectId = user?.isSystemAdmin ? adminProjectId : context?.projectId;
+
+  const [showTempPanel, setShowTempPanel] = useState(false);
+  const [showAddTempCompany, setShowAddTempCompany] = useState(false);
+  const [newTempCompanyName, setNewTempCompanyName] = useState('');
+  const [addTempCompanySubmitting, setAddTempCompanySubmitting] = useState(false);
+  const [addTempCompanyError, setAddTempCompanyError] = useState(null);
+  const [tempNotice, setTempNotice] = useState(null);
+
+  const [showTempEmployeeAdd, setShowTempEmployeeAdd] = useState(false);
+  const [tempEmployeeForm, setTempEmployeeForm] = useState(EMPTY_TEMP_EMPLOYEE);
+  const [tempEmployeeSubmitting, setTempEmployeeSubmitting] = useState(false);
+  const [tempEmployeeError, setTempEmployeeError] = useState(null);
 
   const [companies, setCompanies] = useState(null);
   const [error, setError] = useState(null);
@@ -224,6 +258,67 @@ export function EmployeesPage() {
     }
   }
 
+  async function handleAddTempCompany() {
+    if (!newTempCompanyName.trim() || !effectiveProjectId) return;
+    setAddTempCompanySubmitting(true);
+    setAddTempCompanyError(null);
+    try {
+      const { data } = await apiClient.post('/admin/companies', {
+        projectId: effectiveProjectId,
+        name: newTempCompanyName.trim(),
+        isTemporaryAssignment: true,
+      });
+      setShowAddTempCompany(false);
+      setNewTempCompanyName('');
+      if (data?.queued) {
+        setTempNotice(data.message || 'Firma admin onayına gönderildi.');
+      } else {
+        loadCompanies();
+      }
+    } catch (err) {
+      setAddTempCompanyError(getErrorMessage(err));
+    } finally {
+      setAddTempCompanySubmitting(false);
+    }
+  }
+
+  async function handleAddTempEmployee() {
+    if (!tempEmployeeForm.fullName.trim() || !selectedCompany) return;
+    setTempEmployeeSubmitting(true);
+    setTempEmployeeError(null);
+    try {
+      const payload = {
+        companyId: selectedCompany.id,
+        fullName: tempEmployeeForm.fullName.trim(),
+        nationalId: tempEmployeeForm.nationalId.trim() || null,
+        position: tempEmployeeForm.position.trim() || null,
+        startDate: tempEmployeeForm.startDate || null,
+        endDate: tempEmployeeForm.endDate || null,
+        assignmentFormExists: tempEmployeeForm.assignmentFormExists,
+        sgkEntryDocExists: tempEmployeeForm.sgkEntryDocExists,
+        isgTrainingDate: tempEmployeeForm.isgTrainingDate || null,
+        isgTrainingExpiryDate: tempEmployeeForm.isgTrainingExpiryDate || null,
+        orientationTrainingDate: tempEmployeeForm.orientationTrainingDate || null,
+        ppeHandoverDocExists: tempEmployeeForm.ppeHandoverDocExists,
+      };
+      if (user?.isSystemAdmin) payload.projectId = activeProjectId;
+      const { data } = await apiClient.post('/employees', payload);
+      setShowTempEmployeeAdd(false);
+      setTempEmployeeForm(EMPTY_TEMP_EMPLOYEE);
+      if (data?.queued) {
+        setTempNotice(data.message || 'Çalışan admin onayına gönderildi.');
+      } else {
+        loadEmployees();
+        loadCompanies();
+        loadStats();
+      }
+    } catch (err) {
+      setTempEmployeeError(getErrorMessage(err));
+    } finally {
+      setTempEmployeeSubmitting(false);
+    }
+  }
+
   function toggleSelected(id) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -274,6 +369,10 @@ export function EmployeesPage() {
       setBulkDeleting(false);
     }
   }
+
+  const tempCompanies = (companies || []).filter((c) => c.isTemporaryAssignment);
+  const regularCompanies = (companies || []).filter((c) => !c.isTemporaryAssignment);
+  const tempEmployeeTotal = tempCompanies.reduce((sum, c) => sum + (c.activeEmployeeCount || 0), 0);
 
   // --- Firma seçim ekranı ---
   if (!selectedCompany) {
@@ -337,15 +436,82 @@ export function EmployeesPage() {
           </Card>
         )}
 
+        {tempNotice && <Alert variant="success">{tempNotice}</Alert>}
+
         {companies === null && <p className="text-sm text-slate-500">Yükleniyor...</p>}
+
+        {companies !== null && (canManageTemp || tempCompanies.length > 0) && (
+          <Card className="space-y-3 border-amber-200 bg-amber-50">
+            <button type="button" onClick={() => setShowTempPanel((v) => !v)} className="flex w-full items-center justify-between text-left">
+              <div>
+                <span className="text-sm font-semibold text-amber-800">🕐 Geçici Görevlendirme</span>
+                <p className="text-xs text-amber-700">
+                  {tempCompanies.length} firma · {tempEmployeeTotal} çalışan
+                </p>
+              </div>
+              <span className="text-xs font-medium text-amber-700">{showTempPanel ? 'Gizle ▲' : 'Göster ▼'}</span>
+            </button>
+
+            {showTempPanel && (
+              <div className="space-y-2 pt-1">
+                {tempCompanies.length === 0 && <p className="text-xs text-amber-700">Henüz geçici görevlendirme firması eklenmemiş.</p>}
+                {tempCompanies.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setSelectedCompany({ id: c.id, name: c.name, isTemporaryAssignment: true })}
+                    className="flex w-full items-center justify-between rounded-xl border border-amber-200 bg-surface p-3 text-left transition hover:border-amber-400 active:scale-[0.99]"
+                  >
+                    <div>
+                      <div className="font-medium text-slate-800">{c.name}</div>
+                      <div className="text-xs text-slate-500">
+                        {c.activeEmployeeCount} aktif çalışan
+                        {c.archivedEmployeeCount > 0 ? ` · ${c.archivedEmployeeCount} arşivde` : ''}
+                      </div>
+                    </div>
+                    <span className="text-slate-300">›</span>
+                  </button>
+                ))}
+
+                {canManageTemp && (
+                  <>
+                    {addTempCompanyError && <Alert>{addTempCompanyError}</Alert>}
+                    {!showAddTempCompany ? (
+                      <Button type="button" variant="ghost" onClick={() => setShowAddTempCompany(true)}>
+                        + Geçici Görevli Firma Ekle
+                      </Button>
+                    ) : (
+                      <div className="space-y-2 rounded-lg border border-amber-200 bg-surface p-2.5">
+                        <Input
+                          label="Firma Adı"
+                          value={newTempCompanyName}
+                          onChange={(e) => setNewTempCompanyName(e.target.value)}
+                        />
+                        <div className="flex gap-2">
+                          <Button type="button" onClick={handleAddTempCompany} disabled={addTempCompanySubmitting || !newTempCompanyName.trim()}>
+                            {addTempCompanySubmitting ? 'Ekleniyor...' : 'Kaydet'}
+                          </Button>
+                          <Button type="button" variant="ghost" onClick={() => setShowAddTempCompany(false)}>
+                            Vazgeç
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </Card>
+        )}
+
         {companies?.length === 0 && <p className="text-sm text-slate-500">Bu projede görüntüleyebileceğiniz bir firma yok.</p>}
 
         <div className="space-y-2">
-          {companies?.map((c) => (
+          {regularCompanies.map((c) => (
             <button
               key={c.id}
               type="button"
-              onClick={() => setSelectedCompany({ id: c.id, name: c.name })}
+              onClick={() => setSelectedCompany({ id: c.id, name: c.name, isTemporaryAssignment: false })}
               className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-surface p-3.5 text-left transition hover:border-brand-300 active:scale-[0.99]"
             >
               <div>
@@ -372,9 +538,13 @@ export function EmployeesPage() {
         ‹ Firmalar
       </button>
 
-      <h1 className="text-lg font-bold text-slate-800 sm:text-xl">{selectedCompany.name}</h1>
+      <div className="flex items-center gap-2">
+        <h1 className="text-lg font-bold text-slate-800 sm:text-xl">{selectedCompany.name}</h1>
+        {selectedCompany.isTemporaryAssignment && <Badge variant="warning">🕐 Geçici Görevlendirme</Badge>}
+      </div>
 
       {error && <Alert>{error}</Alert>}
+      {tempNotice && <Alert variant="success">{tempNotice}</Alert>}
 
       <div className="flex gap-2 overflow-x-auto pb-1">
         <button
@@ -423,7 +593,7 @@ export function EmployeesPage() {
         </Select>
       </div>
 
-      {canManageEmployees && (
+      {canManageEmployees && !selectedCompany.isTemporaryAssignment && (
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <Button type="button" variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={importing}>
             {importing ? 'Yükleniyor...' : '📥 Excel ile Liste Yükle'}
@@ -435,7 +605,13 @@ export function EmployeesPage() {
         </div>
       )}
 
-      {canManageEmployees && (
+      {canManageTemp && selectedCompany.isTemporaryAssignment && (
+        <Button type="button" variant="secondary" onClick={() => setShowTempEmployeeAdd((v) => !v)}>
+          + Çalışan Ekle
+        </Button>
+      )}
+
+      {canManageEmployees && !selectedCompany.isTemporaryAssignment && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
           <button type="button" onClick={() => setShowFormatGuide((v) => !v)} className="font-medium text-brand-700 hover:underline">
             {showFormatGuide ? 'Excel formatını gizle ▲' : 'ℹ️ Excel formatı nasıl olmalı? ▼'}
@@ -541,6 +717,93 @@ export function EmployeesPage() {
         </Card>
       )}
 
+      {showTempEmployeeAdd && (
+        <Card className="space-y-3">
+          <p className="text-xs text-slate-500">
+            Mevzuata uygun geçici görevlendirme kaydı (bkz. 6331 sayılı İSG Kanunu / 5510 sayılı Kanun kapsamında sahaya
+            geçici görevle giren personel için gereken bilgiler).
+          </p>
+          {tempEmployeeError && <Alert>{tempEmployeeError}</Alert>}
+          <Input
+            label="Ad Soyad *"
+            value={tempEmployeeForm.fullName}
+            onChange={(e) => setTempEmployeeForm((f) => ({ ...f, fullName: e.target.value }))}
+          />
+          <Input
+            label="TC Kimlik No"
+            value={tempEmployeeForm.nationalId}
+            onChange={(e) => setTempEmployeeForm((f) => ({ ...f, nationalId: e.target.value }))}
+          />
+          <Input
+            label="Görevi"
+            value={tempEmployeeForm.position}
+            onChange={(e) => setTempEmployeeForm((f) => ({ ...f, position: e.target.value }))}
+          />
+          <Input
+            label="Görevlendirme Tarihi"
+            type="date"
+            value={tempEmployeeForm.startDate}
+            onChange={(e) => setTempEmployeeForm((f) => ({ ...f, startDate: e.target.value }))}
+          />
+          <Input
+            label="Görev Bitiş Tarihi"
+            type="date"
+            value={tempEmployeeForm.endDate}
+            onChange={(e) => setTempEmployeeForm((f) => ({ ...f, endDate: e.target.value }))}
+          />
+          <Input
+            label="İş Güvenliği Eğitim Sertifika Tarihi"
+            type="date"
+            value={tempEmployeeForm.isgTrainingDate}
+            onChange={(e) => setTempEmployeeForm((f) => ({ ...f, isgTrainingDate: e.target.value }))}
+          />
+          <Input
+            label="Eğitim Sertifikası Geçerlilik Tarihi"
+            type="date"
+            value={tempEmployeeForm.isgTrainingExpiryDate}
+            onChange={(e) => setTempEmployeeForm((f) => ({ ...f, isgTrainingExpiryDate: e.target.value }))}
+          />
+          <Input
+            label="Oryantasyon Eğitim Tarihi"
+            type="date"
+            value={tempEmployeeForm.orientationTrainingDate}
+            onChange={(e) => setTempEmployeeForm((f) => ({ ...f, orientationTrainingDate: e.target.value }))}
+          />
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={tempEmployeeForm.assignmentFormExists}
+              onChange={(e) => setTempEmployeeForm((f) => ({ ...f, assignmentFormExists: e.target.checked }))}
+            />
+            Görevlendirme formu var
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={tempEmployeeForm.sgkEntryDocExists}
+              onChange={(e) => setTempEmployeeForm((f) => ({ ...f, sgkEntryDocExists: e.target.checked }))}
+            />
+            SGK giriş belgesi var
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={tempEmployeeForm.ppeHandoverDocExists}
+              onChange={(e) => setTempEmployeeForm((f) => ({ ...f, ppeHandoverDocExists: e.target.checked }))}
+            />
+            KKD zimmet tutanağı var
+          </label>
+          <div className="flex gap-2">
+            <Button type="button" onClick={handleAddTempEmployee} disabled={tempEmployeeSubmitting || !tempEmployeeForm.fullName.trim()}>
+              {tempEmployeeSubmitting ? 'Ekleniyor...' : 'Kaydet'}
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => setShowTempEmployeeAdd(false)}>
+              Vazgeç
+            </Button>
+          </div>
+        </Card>
+      )}
+
       {employees?.length === 0 && <p className="text-sm text-slate-500">Kayıt bulunamadı.</p>}
 
       {canManageEmployees && employees?.length > 0 && (
@@ -596,7 +859,7 @@ export function EmployeesPage() {
                     {emp.isgRole && <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[11px] font-medium text-purple-700">🦺 {emp.isgRole}</span>}
                   </div>
                 </Link>
-                {canManageEmployees && (
+                {(canManageEmployees || (canManageTemp && selectedCompany.isTemporaryAssignment)) && (
                   <button
                     type="button"
                     onClick={() => handleDeleteOne(emp)}

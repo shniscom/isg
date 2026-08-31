@@ -27,6 +27,7 @@ export function EmployeeDetailPage() {
   const { user, hasPermission } = useAuth();
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
 
   const [showEdit, setShowEdit] = useState(false);
   const [editForm, setEditForm] = useState(null);
@@ -51,7 +52,9 @@ export function EmployeeDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const canManage = user?.isSystemAdmin || hasPermission('uygunsuzluk_acma');
+  const isTemp = !!data?.company?.isTemporaryAssignment;
+  const canManage = user?.isSystemAdmin || hasPermission('uygunsuzluk_acma') || (isTemp && hasPermission('gecici_gorevlendirme_yonetimi'));
+  const canDelete = user?.isSystemAdmin || (isTemp && hasPermission('gecici_gorevlendirme_yonetimi'));
 
   function openEdit() {
     setEditError(null);
@@ -69,6 +72,11 @@ export function EmployeeDetailPage() {
       mykCertificateNo: data.employee.mykCertificateNo || '',
       mykCertificateDate: toDateInput(data.employee.mykCertificateDate),
       startDate: toDateInput(data.employee.startDate),
+      endDate: toDateInput(data.employee.endDate),
+      assignmentFormExists: !!data.employee.assignmentFormExists,
+      sgkEntryDocExists: !!data.employee.sgkEntryDocExists,
+      orientationTrainingDate: toDateInput(data.employee.orientationTrainingDate),
+      ppeHandoverDocExists: !!data.employee.ppeHandoverDocExists,
     });
     setShowEdit(true);
   }
@@ -77,7 +85,7 @@ export function EmployeeDetailPage() {
     setEditSubmitting(true);
     setEditError(null);
     try {
-      await apiClient.patch(`/employees/${id}`, {
+      const payload = {
         fullName: editForm.fullName.trim(),
         nationalId: editForm.nationalId.trim() || null,
         position: editForm.position.trim() || null,
@@ -91,9 +99,21 @@ export function EmployeeDetailPage() {
         mykCertificateNo: editForm.mykCertificateNo.trim() || null,
         mykCertificateDate: editForm.mykCertificateDate || null,
         startDate: editForm.startDate || null,
-      });
+      };
+      if (isTemp) {
+        payload.endDate = editForm.endDate || null;
+        payload.assignmentFormExists = editForm.assignmentFormExists;
+        payload.sgkEntryDocExists = editForm.sgkEntryDocExists;
+        payload.orientationTrainingDate = editForm.orientationTrainingDate || null;
+        payload.ppeHandoverDocExists = editForm.ppeHandoverDocExists;
+      }
+      const { data: res } = await apiClient.patch(`/employees/${id}`, payload);
       setShowEdit(false);
-      load();
+      if (res?.queued) {
+        setNotice(res.message || 'Değişiklik admin onayına gönderildi.');
+      } else {
+        load();
+      }
     } catch (err) {
       setEditError(getErrorMessage(err));
     } finally {
@@ -162,12 +182,17 @@ export function EmployeeDetailPage() {
       </Link>
 
       <Card className="space-y-3">
+        {notice && <Alert variant="success">{notice}</Alert>}
         <div className="flex items-start justify-between gap-2">
           <div>
             <h1 className="text-xl font-bold text-slate-800">{employee.fullName}</h1>
             {employee.position && <p className="text-sm text-slate-500">{employee.position}</p>}
+            {data.company?.name && <p className="text-xs text-slate-400">{data.company.name}</p>}
           </div>
-          {!employee.isActive && <Badge variant="danger">Arşivde</Badge>}
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            {isTemp && <Badge variant="warning">🕐 Geçici Görevlendirme</Badge>}
+            {!employee.isActive && <Badge variant="danger">Arşivde</Badge>}
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-1.5">
@@ -242,7 +267,26 @@ export function EmployeeDetailPage() {
               <span className="text-slate-400">Sağlık Yetkilisi İmzası:</span> {employee.healthAuthoritySignatureNote}
             </div>
           )}
+          {isTemp && employee.orientationTrainingDate && (
+            <div>
+              <span className="text-slate-400">Oryantasyon Eğitimi:</span> {formatDate(employee.orientationTrainingDate)}
+            </div>
+          )}
         </div>
+
+        {isTemp && (
+          <div className="flex flex-wrap gap-1.5 border-t border-slate-100 pt-2.5">
+            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${employee.assignmentFormExists ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+              {employee.assignmentFormExists ? '✓' : '✗'} Görevlendirme Formu
+            </span>
+            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${employee.sgkEntryDocExists ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+              {employee.sgkEntryDocExists ? '✓' : '✗'} SGK Giriş Belgesi
+            </span>
+            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${employee.ppeHandoverDocExists ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+              {employee.ppeHandoverDocExists ? '✓' : '✗'} KKD Zimmet Tutanağı
+            </span>
+          </div>
+        )}
 
         {canManage && (
           <div className="flex flex-wrap gap-2 pt-1">
@@ -261,7 +305,7 @@ export function EmployeeDetailPage() {
           </div>
         )}
 
-        {user?.isSystemAdmin && (
+        {canDelete && (
           <div className="border-t border-slate-100 pt-3">
             <button
               type="button"
@@ -327,6 +371,47 @@ export function EmployeeDetailPage() {
               value={editForm.mykCertificateDate}
               onChange={(e) => setEditForm((f) => ({ ...f, mykCertificateDate: e.target.value }))}
             />
+            {isTemp && (
+              <div className="space-y-2.5 rounded-lg border border-amber-200 bg-amber-50 p-2.5">
+                <p className="text-xs font-semibold text-amber-800">🕐 Geçici Görevlendirme Bilgileri</p>
+                <Input
+                  label="Görev Bitiş Tarihi"
+                  type="date"
+                  value={editForm.endDate}
+                  onChange={(e) => setEditForm((f) => ({ ...f, endDate: e.target.value }))}
+                />
+                <Input
+                  label="Oryantasyon Eğitim Tarihi"
+                  type="date"
+                  value={editForm.orientationTrainingDate}
+                  onChange={(e) => setEditForm((f) => ({ ...f, orientationTrainingDate: e.target.value }))}
+                />
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={editForm.assignmentFormExists}
+                    onChange={(e) => setEditForm((f) => ({ ...f, assignmentFormExists: e.target.checked }))}
+                  />
+                  Görevlendirme formu var
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={editForm.sgkEntryDocExists}
+                    onChange={(e) => setEditForm((f) => ({ ...f, sgkEntryDocExists: e.target.checked }))}
+                  />
+                  SGK giriş belgesi var
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={editForm.ppeHandoverDocExists}
+                    onChange={(e) => setEditForm((f) => ({ ...f, ppeHandoverDocExists: e.target.checked }))}
+                  />
+                  KKD zimmet tutanağı var
+                </label>
+              </div>
+            )}
             <div className="flex gap-2">
               <Button type="button" onClick={handleSaveEdit} disabled={editSubmitting}>
                 {editSubmitting ? 'Kaydediliyor...' : 'Kaydet'}

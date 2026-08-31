@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import apiClient, { getErrorMessage } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
 import { Card, Button, Input, Select, Alert, Badge } from '../../components/ui';
+import { formatDate } from '../../lib/nonconformity';
 
 const COMPANY_TYPES = [
   { value: 'ANA_FIRMA', label: 'Ana Firma' },
@@ -75,11 +76,24 @@ function CompanySummaryBadges({ summary }) {
 }
 
 export function CompaniesPage() {
-  const { hasPermission } = useAuth();
+  const { user, hasPermission, context } = useAuth();
   const canManage = hasPermission('firma_yonetme');
+  // Geçici görevlendirme firmalarını oluşturma/düzenleme/silme için 'firma_yonetme' yerine
+  // 'gecici_gorevlendirme_yonetimi' de yeterlidir (bkz. backend admin/companies.routes.js
+  // WRITE_PERMISSIONS) - ama bu yetkiyle SADECE geçici görevlendirme firmalarına dokunulabilir.
+  const canManageTemp = canManage || hasPermission('gecici_gorevlendirme_yonetimi');
 
   const [projects, setProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState('');
+
+  const [showTempPanel, setShowTempPanel] = useState(false);
+  const [tempStatusTab, setTempStatusTab] = useState('active'); // 'active' | 'archived'
+  const [selectedTempCompany, setSelectedTempCompany] = useState(null); // { id, name }
+  const [tempEmployees, setTempEmployees] = useState(null);
+  const [showAddTempCompany, setShowAddTempCompany] = useState(false);
+  const [newTempCompanyName, setNewTempCompanyName] = useState('');
+  const [addTempSubmitting, setAddTempSubmitting] = useState(false);
+  const [addTempError, setAddTempError] = useState(null);
   const [projectBlocks, setProjectBlocks] = useState([]);
   const [companies, setCompanies] = useState(null);
   const [error, setError] = useState(null);
@@ -95,14 +109,23 @@ export function CompaniesPage() {
   const [editSubmitting, setEditSubmitting] = useState(false);
 
   useEffect(() => {
-    apiClient
-      .get('/admin/projects')
-      .then(({ data }) => {
-        setProjects(data.projects);
-        if (data.projects.length > 0) setSelectedProjectId(data.projects[0].id);
-      })
-      .catch((err) => setError(getErrorMessage(err)));
-  }, []);
+    // '/admin/projects' 'proje_yonetme' yetkisi gerektirir - yalnızca sistem admini için proje
+    // seçme dropdown'ı gösterilir. Diğer herkes (firma_yonetme/firma_goruntuleme/
+    // gecici_gorevlendirme_yonetimi) zaten tek bir projeye bağlı çalışır (bkz. EmployeesPage.jsx'te
+    // aynı desen) - onlar için doğrudan aktif proje bağlamı (context.projectId) kullanılır.
+    if (user?.isSystemAdmin) {
+      apiClient
+        .get('/admin/projects')
+        .then(({ data }) => {
+          setProjects(data.projects);
+          if (data.projects.length > 0) setSelectedProjectId(data.projects[0].id);
+        })
+        .catch((err) => setError(getErrorMessage(err)));
+    } else if (context?.projectId) {
+      setSelectedProjectId(context.projectId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, context]);
 
   async function loadCompanies(projectId) {
     if (!projectId) return;
@@ -219,6 +242,55 @@ export function CompaniesPage() {
     }
   }
 
+  async function loadTempEmployees(company) {
+    setTempEmployees(null);
+    try {
+      const params = { companyId: company.id, status: 'all' };
+      if (selectedProjectId) params.projectId = selectedProjectId;
+      const { data } = await apiClient.get('/employees', { params });
+      setTempEmployees(data.employees);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
+  }
+
+  function openTempCompany(company) {
+    setSelectedTempCompany({ id: company.id, name: company.name });
+    loadTempEmployees(company);
+  }
+
+  async function handleAddTempCompany() {
+    if (!newTempCompanyName.trim() || !selectedProjectId) return;
+    setAddTempSubmitting(true);
+    setAddTempError(null);
+    try {
+      const { data } = await apiClient.post('/admin/companies', {
+        projectId: selectedProjectId,
+        name: newTempCompanyName.trim(),
+        isTemporaryAssignment: true,
+      });
+      setShowAddTempCompany(false);
+      setNewTempCompanyName('');
+      if (data.queued) {
+        setNotice(data.message || 'Firma admin onayına gönderildi.');
+      } else {
+        setNotice(`"${newTempCompanyName.trim()}" geçici görevlendirme firması eklendi.`);
+      }
+      await loadCompanies(selectedProjectId);
+    } catch (err) {
+      setAddTempError(getErrorMessage(err));
+    } finally {
+      setAddTempSubmitting(false);
+    }
+  }
+
+  const tempCompanies = (companies || []).filter((c) => c.isTemporaryAssignment);
+  const regularCompanies = (companies || []).filter((c) => !c.isTemporaryAssignment);
+  const activeTempCompanies = tempCompanies.filter((c) => c.isActive);
+  const archivedTempCompanies = tempCompanies.filter((c) => !c.isActive);
+  const tempEmployeeTotal = tempCompanies.reduce((sum, c) => sum + (c.summary?.employeeCount || 0), 0);
+  const visibleTempCompanies = tempStatusTab === 'active' ? activeTempCompanies : archivedTempCompanies;
+
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div className="flex items-center justify-between">
@@ -233,17 +305,131 @@ export function CompaniesPage() {
       {error && <Alert>{error}</Alert>}
       {notice && <Alert variant="success">{notice}</Alert>}
 
-      {projects.length === 0 ? (
-        <Alert variant="warning">Firma tanımlayabilmek için önce bir proje oluşturmalısınız.</Alert>
-      ) : (
-        <Select label="Proje" value={selectedProjectId} onChange={(e) => setSelectedProjectId(e.target.value)}>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </Select>
+      {selectedProjectId && (canManageTemp || tempCompanies.length > 0) && (
+        <Card className="space-y-3 border-amber-200 bg-amber-50">
+          <button type="button" onClick={() => setShowTempPanel((v) => !v)} className="flex w-full items-center justify-between text-left">
+            <div>
+              <span className="text-sm font-semibold text-amber-800">🕐 Geçici Görevlendirme Firmaları</span>
+              <p className="text-xs text-amber-700">
+                {tempCompanies.length} firma · {tempEmployeeTotal} çalışan
+              </p>
+            </div>
+            <span className="text-xs font-medium text-amber-700">{showTempPanel ? 'Gizle ▲' : 'Göster ▼'}</span>
+          </button>
+
+          {showTempPanel && !selectedTempCompany && (
+            <div className="space-y-3 pt-1">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTempStatusTab('active')}
+                  className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                    tempStatusTab === 'active' ? 'bg-amber-700 text-white' : 'bg-white text-amber-700'
+                  }`}
+                >
+                  Aktif ({activeTempCompanies.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTempStatusTab('archived')}
+                  className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                    tempStatusTab === 'archived' ? 'bg-amber-700 text-white' : 'bg-white text-amber-700'
+                  }`}
+                >
+                  Pasif ({archivedTempCompanies.length})
+                </button>
+              </div>
+
+              {visibleTempCompanies.length === 0 && <p className="text-xs text-amber-700">Bu durumda firma yok.</p>}
+              <div className="space-y-2">
+                {visibleTempCompanies.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => openTempCompany(c)}
+                    className="flex w-full items-center justify-between rounded-xl border border-amber-200 bg-surface p-3 text-left transition hover:border-amber-400"
+                  >
+                    <div>
+                      <div className="font-medium text-slate-800">{c.name}</div>
+                      <div className="text-xs text-slate-500">{c.summary?.employeeCount || 0} çalışan</div>
+                    </div>
+                    <span className="text-slate-300">›</span>
+                  </button>
+                ))}
+              </div>
+
+              {canManageTemp && (
+                <>
+                  {addTempError && <Alert>{addTempError}</Alert>}
+                  {!showAddTempCompany ? (
+                    <Button type="button" variant="ghost" onClick={() => setShowAddTempCompany(true)}>
+                      + Geçici Görevli Firma Ekle
+                    </Button>
+                  ) : (
+                    <div className="space-y-2 rounded-lg border border-amber-200 bg-surface p-2.5">
+                      <Input label="Firma Adı" value={newTempCompanyName} onChange={(e) => setNewTempCompanyName(e.target.value)} />
+                      <div className="flex gap-2">
+                        <Button type="button" onClick={handleAddTempCompany} disabled={addTempSubmitting || !newTempCompanyName.trim()}>
+                          {addTempSubmitting ? 'Ekleniyor...' : 'Kaydet'}
+                        </Button>
+                        <Button type="button" variant="ghost" onClick={() => setShowAddTempCompany(false)}>
+                          Vazgeç
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {showTempPanel && selectedTempCompany && (
+            <div className="space-y-2 pt-1">
+              <button type="button" onClick={() => setSelectedTempCompany(null)} className="text-xs font-medium text-amber-700 hover:underline">
+                ‹ Geçici Görevlendirme Firmaları
+              </button>
+              <p className="font-medium text-slate-800">{selectedTempCompany.name}</p>
+              {tempEmployees === null && <p className="text-xs text-slate-500">Yükleniyor...</p>}
+              {tempEmployees?.length === 0 && <p className="text-xs text-slate-500">Bu firmada henüz çalışan yok.</p>}
+              <div className="space-y-2">
+                {tempEmployees?.map((emp) => (
+                  <Link
+                    key={emp.id}
+                    to={`/calisanlar/${emp.id}`}
+                    className="flex items-center justify-between rounded-xl border border-amber-200 bg-surface p-3 transition hover:border-amber-400"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate font-medium text-slate-800">{emp.fullName}</span>
+                        {!emp.isActive && <Badge variant="danger">Arşivde</Badge>}
+                      </div>
+                      <div className="truncate text-xs text-slate-500">
+                        {emp.position ? `${emp.position} · ` : ''}
+                        {emp.startDate ? `Görevlendirme: ${formatDate(emp.startDate)}` : ''}
+                        {emp.endDate ? ` · Bitiş: ${formatDate(emp.endDate)}` : ''}
+                      </div>
+                    </div>
+                    <span className="text-slate-300">›</span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+        </Card>
       )}
+
+      {user?.isSystemAdmin &&
+        (projects.length === 0 ? (
+          <Alert variant="warning">Firma tanımlayabilmek için önce bir proje oluşturmalısınız.</Alert>
+        ) : (
+          <Select label="Proje" value={selectedProjectId} onChange={(e) => setSelectedProjectId(e.target.value)}>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </Select>
+        ))}
 
       {showForm && canManage && (
         <Card>
@@ -276,8 +462,8 @@ export function CompaniesPage() {
       )}
 
       <div className="space-y-3">
-        {companies?.length === 0 && <p className="text-sm text-slate-500">Bu projede henüz firma tanımlanmamış.</p>}
-        {companies?.map((c) => (
+        {companies !== null && regularCompanies.length === 0 && <p className="text-sm text-slate-500">Bu projede henüz firma tanımlanmamış.</p>}
+        {regularCompanies.map((c) => (
           <div key={c.id}>
             <Link to={`/admin/firmalar/${c.id}`}>
               <Card className="transition hover:border-brand-300 hover:shadow-md">

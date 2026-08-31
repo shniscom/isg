@@ -195,6 +195,47 @@ const TOPICS = [
     ],
   },
   {
+    id: 'gecici-gorevlendirme',
+    icon: '🕐',
+    title: 'Geçici Görevlendirme',
+    summary: 'Sahaya kısa süreliğine görevle giren firma çalışanlarının ayrı takibi.',
+    sections: [
+      {
+        heading: 'Nedir',
+        paragraphs: [
+          'Bazı firma çalışanları sahaya sürekli değil, geçici bir görevle (belirli bir tarih aralığında) girer. Bu kişiler normal firma/çalışan listelerini kalabalıklaştırmasın diye Çalışanlar ve Firmalar sekmelerinde ayrı bir "Geçici Görevlendirme" bölümünde takip edilir.',
+          'Bu iki sekmedeki geçici görevlendirme görünümleri aynı veriyi gösterir (bağlantılıdır): bir firmayı/çalışanı hangi sekmeden eklerseniz ekleyin, diğer sekmede de görünür.',
+        ],
+      },
+      {
+        heading: 'Yetki',
+        paragraphs: [
+          '"Geçici Görevlendirme Yönetimi" yetkisi, yalnızca geçici görevlendirme firması/çalışanı oluşturma ve düzenleme hakkı verir - normal (geçici olmayan) firma ve çalışanlara bu yetkiyle dokunulamaz. Firma Yönetme veya İnsan Kaynakları Yönetimi yetkisi olanlar zaten her iki türe de erişebilir.',
+          'Admin dışında biri geçici görevlendirme firması/çalışanı oluşturur veya düzenlerse, işlem admin onayına gönderilir (Onay Bekleyenler sayfasında görünür); yalnızca admin onaylarsa uygulanır.',
+        ],
+      },
+      {
+        heading: 'Çalışanlar sekmesinden ekleme',
+        paragraphs: [
+          'Çalışanlar sekmesinin en üstünde "🕐 Geçici Görevlendirme" kartı toplam firma ve çalışan sayısını gösterir; açınca geçici firma kartları ve "+ Geçici Görevli Firma Ekle" butonu çıkar.',
+          'Bir geçici firmaya girip "+ Çalışan Ekle" ile mevzuata uygun bir form açılır: ad soyad, T.C. kimlik no, görevi, görevlendirme tarihi, görev bitiş tarihi, görevlendirme formu var mı, SGK giriş belgesi var mı, iş güvenliği eğitim sertifika tarihi ve geçerlilik tarihi, oryantasyon eğitim tarihi, KKD zimmet tutanağı var mı.',
+        ],
+      },
+      {
+        heading: 'Firmalar sekmesinden görüntüleme',
+        paragraphs: [
+          'Firmalar sekmesindeki "Geçici Görevlendirme Firmaları" kartında Aktif/Pasif sekmeleri ile firma sayıları ayrı ayrı gösterilir. Bir firmaya tıklayınca o firmanın geçici çalışanları listelenir; bir çalışana tıklayınca bilgileri görüntülenip düzenlenebilir.',
+        ],
+      },
+      {
+        heading: 'Neden bu bilgiler isteniyor',
+        paragraphs: [
+          '6331 sayılı İSG Kanunu ve 5510 sayılı Kanun kapsamında, sahaya geçici görevle giren personelin SGK giriş bildirgesi, görevlendirme yazısı, İSG eğitim sertifikası ve yeni sahada verilen oryantasyon eğitimi gibi belgelerinin dosyada bulunması gerekir; bu form alanları bu asgari gereklilikleri karşılayacak şekilde hazırlanmıştır.',
+        ],
+      },
+    ],
+  },
+  {
     id: 'ik',
     icon: '🧑‍💼',
     title: 'İnsan Kaynakları',
@@ -308,6 +349,10 @@ const TOPICS = [
       {
         heading: 'Firma detay sayfası',
         paragraphs: ['Firma kartına tıklanınca açılan detay sayfasında bölgeler (bloklar), firma rolleri, acil durum ekipleri ile MYK/eğitim oranları gibi özet bilgiler sekmeler halinde yer alır.'],
+      },
+      {
+        heading: 'Geçici görevlendirme firmaları',
+        paragraphs: ['Sahaya kısa süreliğine görevle giren firmalar bu listede değil, ayrı bir "Geçici Görevlendirme Firmaları" kartında gösterilir - detaylar için "Geçici Görevlendirme" başlığına bakın.'],
       },
     ],
   },

@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import apiClient, { getErrorMessage } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
 import { Card, Button, Input, Select, Textarea, Alert, Badge } from '../../components/ui';
+import { EmployeeCombobox } from '../../components/EmployeeCombobox';
 
 const COMPANY_TYPE_LABELS = {
   ANA_FIRMA: 'Ana Firma',
@@ -513,14 +514,10 @@ function RollerTab({ companyId, roles, employees, roleTypes, canManage, onChange
               <option value="DISARIDAN">Dışarıdan (OSGB vb.)</option>
             </Select>
             {form.source === 'CALISAN' ? (
-              <Select label="Çalışan" value={form.employeeId} onChange={(e) => setForm((f) => ({ ...f, employeeId: e.target.value }))}>
-                <option value="">Seçiniz</option>
-                {employees.map((emp) => (
-                  <option key={emp.id} value={emp.id}>
-                    {emp.fullName}
-                  </option>
-                ))}
-              </Select>
+              <div className="space-y-1.5">
+                <span className="mb-1.5 block text-sm font-medium text-slate-700">Çalışan</span>
+                <EmployeeCombobox employees={employees} value={form.employeeId} onChange={(id) => setForm((f) => ({ ...f, employeeId: id }))} />
+              </div>
             ) : (
               <>
                 <Input label="Ad Soyad" value={form.outsideFullName} onChange={(e) => setForm((f) => ({ ...f, outsideFullName: e.target.value }))} />
@@ -639,25 +636,22 @@ function KazaTab({ companyId, incidents, employees, onChange, setError, setNotic
             <Textarea label="Sebebi" value={form.cause} onChange={(e) => setForm((f) => ({ ...f, cause: e.target.value }))} />
             {form.type === 'KAZA' && (
               <>
-                <Select label="Kazayı Geçiren Çalışan" value={form.employeeId} onChange={(e) => setForm((f) => ({ ...f, employeeId: e.target.value }))}>
-                  <option value="">Seçiniz</option>
-                  {employees.map((emp) => (
-                    <option key={emp.id} value={emp.id}>
-                      {emp.fullName}
-                    </option>
-                  ))}
-                </Select>
+                <div className="space-y-1.5">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">Kazayı Geçiren Çalışan</span>
+                  <EmployeeCombobox employees={employees} value={form.employeeId} onChange={(id) => setForm((f) => ({ ...f, employeeId: id }))} />
+                </div>
                 <Input label="Kazazedenin Mesleği" value={form.victimProfession} onChange={(e) => setForm((f) => ({ ...f, victimProfession: e.target.value }))} />
               </>
             )}
-            <Select label="Görgü Tanığı" value={form.witnessEmployeeId} onChange={(e) => setForm((f) => ({ ...f, witnessEmployeeId: e.target.value }))}>
-              <option value="">Yok</option>
-              {employees.map((emp) => (
-                <option key={emp.id} value={emp.id}>
-                  {emp.fullName}
-                </option>
-              ))}
-            </Select>
+            <div className="space-y-1.5">
+              <span className="mb-1.5 block text-sm font-medium text-slate-700">Görgü Tanığı</span>
+              <EmployeeCombobox
+                employees={employees}
+                value={form.witnessEmployeeId}
+                onChange={(id) => setForm((f) => ({ ...f, witnessEmployeeId: id }))}
+                placeholder="Yok - isim veya TC no yazarak arayın..."
+              />
+            </div>
             {form.witnessEmployeeId && (
               <Textarea label="Görgü Tanığı İfadesi" value={form.witnessStatement} onChange={(e) => setForm((f) => ({ ...f, witnessStatement: e.target.value }))} />
             )}
@@ -1028,14 +1022,14 @@ function EkipmanTab({ projectId, companyId, equipment, employees, onChange, setE
               <option value="KISI">Kişiye zimmetli</option>
             </Select>
             {form.assignedTo === 'KISI' && (
-              <Select label="Zimmetli Kişi" value={form.assignedEmployeeId} onChange={(e) => setForm((f) => ({ ...f, assignedEmployeeId: e.target.value }))}>
-                <option value="">Seçiniz</option>
-                {employees.map((emp) => (
-                  <option key={emp.id} value={emp.id}>
-                    {emp.fullName}
-                  </option>
-                ))}
-              </Select>
+              <div className="space-y-1.5">
+                <span className="mb-1.5 block text-sm font-medium text-slate-700">Zimmetli Kişi</span>
+                <EmployeeCombobox
+                  employees={employees}
+                  value={form.assignedEmployeeId}
+                  onChange={(id) => setForm((f) => ({ ...f, assignedEmployeeId: id }))}
+                />
+              </div>
             )}
             <Select label="Operatör" value={form.operatorSource} onChange={(e) => setForm((f) => ({ ...f, operatorSource: e.target.value }))}>
               <option value="YOK">Yok</option>
@@ -1043,14 +1037,14 @@ function EkipmanTab({ projectId, companyId, equipment, employees, onChange, setE
               <option value="DISARIDAN">Dışarıdan</option>
             </Select>
             {form.operatorSource === 'CALISAN' && (
-              <Select label="Operatör Çalışan" value={form.operatorEmployeeId} onChange={(e) => setForm((f) => ({ ...f, operatorEmployeeId: e.target.value }))}>
-                <option value="">Seçiniz</option>
-                {employees.map((emp) => (
-                  <option key={emp.id} value={emp.id}>
-                    {emp.fullName}
-                  </option>
-                ))}
-              </Select>
+              <div className="space-y-1.5">
+                <span className="mb-1.5 block text-sm font-medium text-slate-700">Operatör Çalışan</span>
+                <EmployeeCombobox
+                  employees={employees}
+                  value={form.operatorEmployeeId}
+                  onChange={(id) => setForm((f) => ({ ...f, operatorEmployeeId: id }))}
+                />
+              </div>
             )}
             {form.operatorSource === 'DISARIDAN' && (
               <>
