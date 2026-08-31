@@ -22,6 +22,7 @@ const { requirePermission } = require('../../middleware/permission');
 const { logAudit } = require('../../utils/audit');
 const { createViewUrl } = require('../../services/storage.service');
 const { computeBoardStatus } = require('../../services/board-meeting.service');
+const { runOrQueueForApproval } = require('../../utils/approval');
 
 const router = express.Router();
 
@@ -318,6 +319,10 @@ router.get(
   })
 );
 
+// Firma düzenleme kritik/geri dönülmez sayılan işlemlerdendir (bkz. utils/approval.js): admin
+// bu isteği anında uygular, admin olmayan biri isterse istek admin onayına kuyruğa alınır ve
+// yalnızca admin onaylarsa gerçek güncelleme services/criticalActions.service.js -> COMPANY_UPDATE
+// üzerinden uygulanır.
 router.patch(
   '/:id',
   requirePermission('firma_yonetme'),
@@ -325,46 +330,39 @@ router.patch(
     const parsed = companyUpdateSchema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz firma bilgisi.', parsed.error.flatten());
 
+    const [company] = await db.select().from(companies).where(eq(companies.id, req.params.id)).limit(1);
+    if (!company) throw ApiError.notFound('Firma bulunamadı.');
+
     const { blockIds, ...companyData } = parsed.data;
 
-    const updated = await db.transaction(async (tx) => {
-      let row;
-      if (Object.keys(companyData).length > 0) {
-        [row] = await tx
-          .update(companies)
-          .set({ ...companyData, updatedAt: new Date() })
-          .where(eq(companies.id, req.params.id))
-          .returning();
-      } else {
-        [row] = await tx.select().from(companies).where(eq(companies.id, req.params.id)).limit(1);
-      }
-      if (!row) return null;
-      if (blockIds !== undefined) {
-        await syncCompanyBlocks(tx, row.id, blockIds);
-      }
-      return row;
+    await runOrQueueForApproval(req, res, {
+      actionType: 'COMPANY_UPDATE',
+      entityType: 'company',
+      entityId: company.id,
+      payload: { companyId: company.id, companyData, blockIds },
+      summary: `"${company.name}" firmasının bilgileri güncellenecek.`,
+      projectId: company.projectId,
     });
-    if (!updated) throw ApiError.notFound('Firma bulunamadı.');
-
-    await logAudit({ userId: req.user.sub, action: 'COMPANY_UPDATE', entityType: 'company', entityId: updated.id, details: parsed.data, ipAddress: req.ip });
-    res.json({ company: updated });
   })
 );
 
-// Firmalar kalıcı silinmez; pasif duruma alınır (soft delete).
+// Firmalar kalıcı silinmez; pasif duruma alınır (soft delete). Yine de kritik/geri dönülmez
+// kabul edilir (firmayı tüm listelerden/atamalardan gizler) ve admin onayına tabidir.
 router.delete(
   '/:id',
   requirePermission('firma_yonetme'),
   asyncHandler(async (req, res) => {
-    const [updated] = await db
-      .update(companies)
-      .set({ isActive: false, updatedAt: new Date() })
-      .where(eq(companies.id, req.params.id))
-      .returning();
-    if (!updated) throw ApiError.notFound('Firma bulunamadı.');
+    const [company] = await db.select().from(companies).where(eq(companies.id, req.params.id)).limit(1);
+    if (!company) throw ApiError.notFound('Firma bulunamadı.');
 
-    await logAudit({ userId: req.user.sub, action: 'COMPANY_DEACTIVATE', entityType: 'company', entityId: updated.id, ipAddress: req.ip });
-    res.json({ company: updated });
+    await runOrQueueForApproval(req, res, {
+      actionType: 'COMPANY_DELETE',
+      entityType: 'company',
+      entityId: company.id,
+      payload: { companyId: company.id },
+      summary: `"${company.name}" firması silinecek (pasife alınacak).`,
+      projectId: company.projectId,
+    });
   })
 );
 

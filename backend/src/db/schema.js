@@ -21,6 +21,9 @@ const companyTypeEnum = pgEnum('company_type', [
 
 const projectStatusEnum = pgEnum('project_status', ['AKTIF', 'PASIF']);
 
+// Kritik/geri dönülmez işlemler için admin onay kuyruğu durumu. bkz. pendingApprovals tablosu.
+const approvalStatusEnum = pgEnum('approval_status', ['BEKLEMEDE', 'ONAYLANDI', 'REDDEDILDI']);
+
 // Uygunsuzluk durum makinesi. FAZ2+3'te yalnızca ACIK <-> BEKLEMEDE -> KAPALI arası geçişler
 // desteklenir. TERMIN_ASIMI (FAZ4) ve ITIRAZ (FAZ5) değerleri şema kararlılığı için şimdiden
 // tanımlanmıştır ama henüz hiçbir işlem bu durumlara otomatik geçiş yapmaz.
@@ -623,6 +626,33 @@ const userInvites = pgTable('user_invites', {
   index('user_invites_user_idx').on(table.userId),
 ]);
 
+// Kritik/geri dönülmez işlemler (firma silme/düzenleme, proje değişikliği, uygunsuzluk silme,
+// ceza onaylama vb.) için admin onay kuyruğu. Admin olmayan bir kullanıcı bu işlemlerden birini
+// tetiklediğinde işlem hemen uygulanmaz; burada BEKLEMEDE bir kayıt oluşur ve yalnızca sistem
+// admini onaylarsa `actionType`'a karşılık gelen işlem (bkz. services/criticalActions.service.js
+// EXECUTORS) gerçekten uygulanır. Admin kendisi aynı işlemi yaparsa bu tabloya hiç uğramadan
+// anında uygulanır (bkz. utils/approval.js runOrQueueForApproval).
+const pendingApprovals = pgTable('pending_approvals', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  actionType: text('action_type').notNull(),
+  entityType: text('entity_type').notNull(),
+  entityId: text('entity_id').notNull(),
+  // Onaylandığında ilgili EXECUTORS[actionType] fonksiyonuna aynen geçirilecek veri.
+  payload: jsonb('payload').notNull().default({}),
+  // Admin onay ekranında gösterilecek insan-okunur özet, örn: '"ABC İnşaat" firması silinecek (pasife alınacak)'.
+  summary: text('summary').notNull(),
+  projectId: text('project_id').references(() => projects.id, { onDelete: 'set null' }),
+  status: approvalStatusEnum('status').notNull().default('BEKLEMEDE'),
+  requestedById: text('requested_by_id').notNull().references(() => users.id),
+  requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+  decidedById: text('decided_by_id').references(() => users.id),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  decisionNote: text('decision_note'),
+}, (table) => [
+  index('pending_approvals_status_idx').on(table.status),
+  index('pending_approvals_project_idx').on(table.projectId),
+]);
+
 // İlişkiler (relational query API için)
 const usersRelations = relations(users, ({ many }) => ({
   companyUsers: many(companyUsers),
@@ -773,9 +803,16 @@ const userInvitesRelations = relations(userInvites, ({ one }) => ({
   user: one(users, { fields: [userInvites.userId], references: [users.id] }),
 }));
 
+const pendingApprovalsRelations = relations(pendingApprovals, ({ one }) => ({
+  project: one(projects, { fields: [pendingApprovals.projectId], references: [projects.id] }),
+  requestedBy: one(users, { fields: [pendingApprovals.requestedById], references: [users.id] }),
+  decidedBy: one(users, { fields: [pendingApprovals.decidedById], references: [users.id] }),
+}));
+
 module.exports = {
   companyTypeEnum,
   projectStatusEnum,
+  approvalStatusEnum,
   nonconformityStatusEnum,
   nonconformityPriorityEnum,
   nonconformityPhotoTypeEnum,
@@ -813,6 +850,7 @@ module.exports = {
   pushSubscriptions,
   systemSettings,
   userInvites,
+  pendingApprovals,
   archives,
   companyBlocks,
   companyRoleTypes,
@@ -845,4 +883,5 @@ module.exports = {
   penaltiesRelations,
   dueDateExtensionsRelations,
   pushSubscriptionsRelations,
+  pendingApprovalsRelations,
 };

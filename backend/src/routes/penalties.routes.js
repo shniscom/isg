@@ -7,9 +7,7 @@ const { requireAuth } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permission');
 const { asyncHandler } = require('../utils/asyncHandler');
 const { ApiError } = require('../utils/apiError');
-const { logAudit } = require('../utils/audit');
-const { createNotifications } = require('../services/notification.service');
-const { loadAssigneeIdsFor } = require('../services/nonconformity.service');
+const { runOrQueueForApproval } = require('../utils/approval');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -128,6 +126,10 @@ async function loadPenaltyWithNc(id) {
   return row;
 }
 
+// Ceza onaylama/reddetme kritik/geri dönülmez kararlar sayılır (bkz. utils/approval.js): admin
+// bu kararı anında uygular; admin olmayan yetkili biri karar verdiğinde istek admin onayına
+// kuyruğa alınır ve yalnızca admin onaylarsa services/criticalActions.service.js ->
+// PENALTY_APPROVE/PENALTY_REJECT üzerinden (bildirimler dahil) gerçekten uygulanır.
 router.post(
   '/:id/approve',
   requirePermission('cezai_islem'),
@@ -147,21 +149,14 @@ router.post(
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz istek.');
 
-    await db
-      .update(penalties)
-      .set({ status: 'ONAYLANDI', decidedById: req.user.sub, decidedAt: new Date(), decisionNote: parsed.data.decisionNote || null })
-      .where(eq(penalties.id, penalty.id));
-
-    const assigneeIds = await loadAssigneeIdsFor(nc.id);
-    await createNotifications(null, {
-      userIds: [...new Set([nc.openedById, ...assigneeIds])],
-      nonconformityId: nc.id,
-      title: 'Ceza talebi onaylandı',
-      message: `${nc.number} numaralı uygunsuzluk için cezai işlem talebi onaylandı.`,
+    await runOrQueueForApproval(req, res, {
+      actionType: 'PENALTY_APPROVE',
+      entityType: 'penalty',
+      entityId: penalty.id,
+      payload: { penaltyId: penalty.id, decisionNote: parsed.data.decisionNote || null },
+      summary: `${nc.number} numaralı uygunsuzluk için cezai işlem talebi onaylanacak.`,
+      projectId: nc.projectId,
     });
-
-    await logAudit({ userId: req.user.sub, action: 'PENALTY_APPROVE', entityType: 'penalty', entityId: penalty.id, ipAddress: req.ip });
-    res.json({ success: true });
   })
 );
 
@@ -182,13 +177,14 @@ router.post(
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Red gerekçesi zorunludur.', parsed.error.flatten());
 
-    await db
-      .update(penalties)
-      .set({ status: 'REDDEDILDI', decidedById: req.user.sub, decidedAt: new Date(), decisionNote: parsed.data.decisionNote })
-      .where(eq(penalties.id, penalty.id));
-
-    await logAudit({ userId: req.user.sub, action: 'PENALTY_REJECT', entityType: 'penalty', entityId: penalty.id, ipAddress: req.ip });
-    res.json({ success: true });
+    await runOrQueueForApproval(req, res, {
+      actionType: 'PENALTY_REJECT',
+      entityType: 'penalty',
+      entityId: penalty.id,
+      payload: { penaltyId: penalty.id, decisionNote: parsed.data.decisionNote },
+      summary: `${nc.number} numaralı uygunsuzluk için cezai işlem talebi reddedilecek.`,
+      projectId: nc.projectId,
+    });
   })
 );
 

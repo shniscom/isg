@@ -31,6 +31,7 @@ const { ApiError } = require('../utils/apiError');
 const { logAudit } = require('../utils/audit');
 const { generateNonconformityNumber, logStatusChange, loadAssigneeIdsFor } = require('../services/nonconformity.service');
 const { createViewUrl } = require('../services/storage.service');
+const { runOrQueueForApproval } = require('../utils/approval');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -817,26 +818,26 @@ router.patch(
   })
 );
 
+// Uygunsuzluk silme kritik/geri dönülmezdir (bkz. utils/approval.js). Admin isteği anında
+// uygular; admin olmayan biri (açan kişi) isterse istek admin onayına kuyruğa alınır ve yalnızca
+// admin onaylarsa services/criticalActions.service.js -> NONCONFORMITY_DELETE üzerinden silinir.
+// Not: Eskiden "kapatılmış bir kaydı yalnızca admin silebilir" kuralı vardı; artık admin onay
+// mekanizması zaten aynı korumayı (kapalı kayıtların da son sözü admin'de) sağladığı için bu
+// özel kısıtlama kaldırıldı - açan kişi kapalı bir kaydın silinmesini talep edebilir, ama
+// silme yalnızca admin onaylarsa gerçekleşir.
 router.delete(
   '/:id',
   asyncHandler(async (req, res) => {
     const nc = await loadEditableNonconformity(req);
-    if (!req.user.isSystemAdmin && nc.status === 'KAPALI') {
-      throw ApiError.forbidden('Kapatılmış bir uygunsuzluğu yalnızca admin silebilir.');
-    }
 
-    await db.delete(nonconformities).where(eq(nonconformities.id, nc.id));
-
-    await logAudit({
-      userId: req.user.sub,
-      action: 'NONCONFORMITY_DELETE',
+    await runOrQueueForApproval(req, res, {
+      actionType: 'NONCONFORMITY_DELETE',
       entityType: 'nonconformity',
       entityId: nc.id,
-      details: { number: nc.number },
-      ipAddress: req.ip,
+      payload: { nonconformityId: nc.id },
+      summary: `${nc.number} numaralı uygunsuzluk kalıcı olarak silinecek.`,
+      projectId: nc.projectId,
     });
-
-    res.json({ success: true });
   })
 );
 

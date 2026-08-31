@@ -99,6 +99,13 @@
       "when": 1788179208343,
       "tag": "0013_bolge_ve_firma_rolu_genisletme",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1788183428023,
+      "tag": "0014_pending_approvals",
+      "breakpoints": true
     }
   ]
 }

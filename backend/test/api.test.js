@@ -758,9 +758,20 @@ test('çalışan kaydı, risk skoru, ceza talebi ve onay akışı', async () => 
   assert.equal(pendingList.status, 200);
   assert.ok(pendingList.body.penalties.some((p) => p.id === penaltyId));
 
-  // Yetkili onaylar
+  // Yetkili onaylar - ceza onaylama kritik/geri dönülmez sayıldığı için (bkz. admin onay
+  // mekanizması) admin olmayan bu kullanıcının onayı ANINDA uygulanmaz, admin onayına kuyruğa alınır.
   const approve = await api('POST', `/penalties/${penaltyId}/approve`, { token: approverToken, body: { decisionNote: 'Onaylandı.' } });
-  assert.equal(approve.status, 200);
+  assert.equal(approve.status, 202);
+  assert.equal(approve.body.queued, true);
+  assert.equal(approve.body.approval.actionType, 'PENALTY_APPROVE');
+
+  // Onay bekliyor - ceza hâlâ BEKLEMEDE.
+  const stillPendingList = await api('GET', `/penalties?projectId=${projectId}&status=BEKLEMEDE`, { token: approverToken });
+  assert.ok(stillPendingList.body.penalties.some((p) => p.id === penaltyId));
+
+  // Admin bu talebi onaylar - ancak burada işlem gerçekten uygulanır ve ceza ONAYLANDI'ya geçer.
+  const adminGrant = await api('POST', `/admin/approvals/${approve.body.approval.id}/approve`, { token: adminToken });
+  assert.equal(adminGrant.status, 200);
 
   const finalizedList = await api('GET', `/penalties?projectId=${projectId}&status=ONAYLANDI`, { token: approverToken });
   assert.ok(finalizedList.body.penalties.some((p) => p.id === penaltyId && p.decidedByName === 'Ceza Onaylayan'));
@@ -1209,14 +1220,19 @@ test('uygunsuzluk düzenleme/silme: admin ve açan kişi yapabilir, başkası ya
   const editSelfAssign = await api('PATCH', `/nonconformities/${ncId}`, { token: openerToken, body: { assignedUserIds: [openerId] } });
   assert.equal(editSelfAssign.status, 400);
 
-  // Açan kişi silebilir (henüz kapalı değil)
+  // Açan kişi (admin değil) silme isteği gönderebilir, ama kritik/geri dönülmez bir işlem
+  // olduğu için artık ANINDA silinmiyor - admin onayına kuyruğa alınıyor (bkz. admin onay
+  // mekanizması testleri: "kritik işlemler admin onayına...").
   const deleteByOpener = await api('DELETE', `/nonconformities/${ncId}`, { token: openerToken });
-  assert.equal(deleteByOpener.status, 200);
+  assert.equal(deleteByOpener.status, 202);
+  assert.equal(deleteByOpener.body.queued, true);
+  assert.equal(deleteByOpener.body.approval.actionType, 'NONCONFORMITY_DELETE');
 
-  const afterDelete = await api('GET', `/nonconformities/${ncId}`, { token: openerToken });
-  assert.equal(afterDelete.status, 404);
+  // Onay bekleniyor - kayıt hâlâ duruyor.
+  const stillThere = await api('GET', `/nonconformities/${ncId}`, { token: openerToken });
+  assert.equal(stillThere.status, 200);
 
-  // Kapalı bir kaydı açan kişi silemez, yalnızca admin silebilir
+  // Admin isterse aynı işlemi kendisi tetiklediğinde anında uygulanır.
   const createNc2 = await api('POST', '/nonconformities', {
     token: openerToken,
     body: { description: 'Kapatılacak uygunsuzluk.', assignedUserIds: [assigneeId], dueDate: new Date(Date.now() + 86400000).toISOString() },
@@ -1224,11 +1240,17 @@ test('uygunsuzluk düzenleme/silme: admin ve açan kişi yapabilir, başkası ya
   const ncId2 = createNc2.body.nonconformity.id;
   await db.update(schema.nonconformities).set({ status: 'KAPALI' }).where(eq(schema.nonconformities.id, ncId2));
 
+  // Kapalı bir kaydı açan kişi de artık silme TALEBİNDE bulunabilir (eskiden 403'tü) - ama bu
+  // da admin onayına kuyruğa alınır, anında silinmez. Admin onay sistemi zaten aynı korumayı
+  // (son sözün admin'de olması) sağladığı için eski "kapalıyı yalnızca admin silebilir" kısıtı
+  // gereksiz hale geldi.
   const deleteClosedByOpener = await api('DELETE', `/nonconformities/${ncId2}`, { token: openerToken });
-  assert.equal(deleteClosedByOpener.status, 403);
+  assert.equal(deleteClosedByOpener.status, 202);
+  assert.equal(deleteClosedByOpener.body.queued, true);
 
   const deleteClosedByAdmin = await api('DELETE', `/nonconformities/${ncId2}`, { token: adminToken });
   assert.equal(deleteClosedByAdmin.status, 200);
+  assert.equal(deleteClosedByAdmin.body.success, true);
 });
 
 test('admin: proje sıfırlama, proje kodu onayı ile tüm uygunsuzlukları siler', async () => {
@@ -2600,4 +2622,90 @@ test('uygunsuzluk firma-özet (company-summary): admin tüm firmaları, kapsamı
   const adminCompanyIds = adminSummary.body.companies.map((c) => c.companyId).sort();
   assert.deepEqual(adminCompanyIds, [companyXId, companyYId].sort());
   assert.equal(adminSummary.body.overall.counts.ACIK, 3);
+});
+
+test('kritik işlemler admin onayına gider: firma düzenle/sil + proje düzenle - admin olmayan kuyruğa alır, admin onayla/reddet uygular', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Onay Mekanizması Projesi', code: 'TST-ONAY-001' } });
+  const projectId = proj.body.project.id;
+
+  const companyCreate = await api('POST', '/admin/companies', {
+    token: adminToken,
+    body: { projectId, name: 'Onay Öncesi Firma', type: 'TASERON' },
+  });
+  const companyId = companyCreate.body.company.id;
+
+  const rolesRes = await api('GET', '/admin/roles', { token: adminToken });
+  const formenRoleId = rolesRes.body.roles.find((r) => r.name === 'Formen').id;
+  const permsRes = await api('GET', '/admin/permissions', { token: adminToken });
+  const permId = (key) => permsRes.body.permissions.find((p) => p.key === key).id;
+
+  // Admin olmayan ama tam yetkili (firma_yonetme + proje_yonetme) bir kullanıcı.
+  const managerCreate = await api('POST', '/admin/users', { token: adminToken, body: { fullName: 'Onay Bekleyen Yönetici', username: 'onay.bekleyen.yonetici' } });
+  const managerId = managerCreate.body.user.id;
+  await api('POST', `/admin/users/${managerId}/projects`, { token: adminToken, body: { projectId, roleId: formenRoleId } });
+  await api('POST', `/admin/users/${managerId}/permissions`, { token: adminToken, body: { permissionId: permId('firma_yonetme'), projectId } });
+  await api('POST', `/admin/users/${managerId}/permissions`, { token: adminToken, body: { permissionId: permId('proje_yonetme'), projectId } });
+
+  const login = await api('POST', '/auth/login', { body: { username: 'onay.bekleyen.yonetici', password: managerCreate.body.tempPassword } });
+  const select = await api('POST', '/auth/select-context', { body: { contextToken: login.body.contextToken, projectId, roleId: formenRoleId } });
+  const managerToken = select.body.accessToken;
+
+  // Admin olmayan bu kullanıcı normalde firma_yonetme/proje_yonetme ile bu işlemleri yapabilirdi,
+  // ama artık kritik/geri dönülmez oldukları için anında uygulanmıyor - kuyruğa alınıyor.
+  const patchAttempt = await api('PATCH', `/admin/companies/${companyId}`, { token: managerToken, body: { name: 'Değişecek Firma Adı' } });
+  assert.equal(patchAttempt.status, 202);
+  assert.equal(patchAttempt.body.queued, true);
+  const updateApprovalId = patchAttempt.body.approval.id;
+
+  const deleteAttempt = await api('DELETE', `/admin/companies/${companyId}`, { token: managerToken });
+  assert.equal(deleteAttempt.status, 202);
+  const deleteApprovalId = deleteAttempt.body.approval.id;
+
+  const projectPatchAttempt = await api('PATCH', `/admin/projects/${projectId}`, { token: managerToken, body: { code: 'TST-ONAY-002' } });
+  assert.equal(projectPatchAttempt.status, 202);
+
+  // Firma hâlâ değişmemiş olmalı - onay bekleniyor.
+  const stillOldName = await api('GET', `/admin/companies/${companyId}`, { token: adminToken });
+  assert.equal(stillOldName.body.company.name, 'Onay Öncesi Firma');
+  assert.equal(stillOldName.body.company.isActive, true);
+
+  // Admin olmayan bu kullanıcı onay kuyruğunu göremez/karar veremez.
+  const managerListAttempt = await api('GET', '/admin/approvals', { token: managerToken });
+  assert.equal(managerListAttempt.status, 403);
+  const managerApproveAttempt = await api('POST', `/admin/approvals/${updateApprovalId}/approve`, { token: managerToken });
+  assert.equal(managerApproveAttempt.status, 403);
+
+  // Admin bekleyen listede 3 kaydı da görür.
+  const pendingList = await api('GET', '/admin/approvals?status=BEKLEMEDE', { token: adminToken });
+  assert.equal(pendingList.status, 200);
+  const pendingIds = pendingList.body.approvals.map((a) => a.id);
+  assert.ok(pendingIds.includes(updateApprovalId));
+  assert.ok(pendingIds.includes(deleteApprovalId));
+  assert.ok(pendingList.body.approvals.every((a) => a.requestedByName));
+
+  // Admin firma güncellemesini onaylar -> gerçekten uygulanır.
+  const approveUpdate = await api('POST', `/admin/approvals/${updateApprovalId}/approve`, { token: adminToken });
+  assert.equal(approveUpdate.status, 200);
+  const afterUpdate = await api('GET', `/admin/companies/${companyId}`, { token: adminToken });
+  assert.equal(afterUpdate.body.company.name, 'Değişecek Firma Adı');
+
+  // Aynı onayı ikinci kez onaylamaya çalışmak artık karara bağlanmış olduğu için engellenir.
+  const approveAgain = await api('POST', `/admin/approvals/${updateApprovalId}/approve`, { token: adminToken });
+  assert.equal(approveAgain.status, 409);
+
+  // Admin firma silme talebini reddeder -> firma pasife alınmaz, karar notu kaydedilir.
+  const rejectDelete = await api('POST', `/admin/approvals/${deleteApprovalId}/reject`, { token: adminToken, body: { decisionNote: 'Bu firma hâlâ aktif çalışıyor, silinmemeli.' } });
+  assert.equal(rejectDelete.status, 200);
+  const afterReject = await api('GET', `/admin/companies/${companyId}`, { token: adminToken });
+  assert.equal(afterReject.body.company.isActive, true);
+
+  const rejectedList = await api('GET', '/admin/approvals?status=REDDEDILDI', { token: adminToken });
+  const rejectedEntry = rejectedList.body.approvals.find((a) => a.id === deleteApprovalId);
+  assert.ok(rejectedEntry);
+  assert.equal(rejectedEntry.decisionNote, 'Bu firma hâlâ aktif çalışıyor, silinmemeli.');
+
+  // Admin kendisi aynı işlemi yaptığında hiç kuyruğa girmeden anında uygulanır.
+  const adminDirectPatch = await api('PATCH', `/admin/companies/${companyId}`, { token: adminToken, body: { name: 'Admin Direkt Değiştirdi' } });
+  assert.equal(adminDirectPatch.status, 200);
+  assert.equal(adminDirectPatch.body.company.name, 'Admin Direkt Değiştirdi');
 });
