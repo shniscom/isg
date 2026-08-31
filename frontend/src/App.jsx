@@ -24,6 +24,7 @@ import { CategoriesPage } from './pages/admin/CategoriesPage';
 import { SettingsPage } from './pages/admin/SettingsPage';
 import { ArchivesPage } from './pages/admin/ArchivesPage';
 import { NonconformitiesListPage } from './pages/NonconformitiesListPage';
+import { NonconformityCompanyCardsPage } from './pages/NonconformityCompanyCardsPage';
 import { NewNonconformityPage } from './pages/NewNonconformityPage';
 import { NonconformityDetailPage } from './pages/NonconformityDetailPage';
 import { NewIncidentPage } from './pages/NewIncidentPage';
@@ -84,7 +85,8 @@ function AppRoutes() {
         <Route path="/profil" element={<ProfilePage />} />
         <Route path="/yetkilerim" element={<PermissionsPage />} />
         <Route path="/gorunum" element={<AppearancePage />} />
-        <Route path="/uygunsuzluklar" element={<NonconformitiesListPage />} />
+        <Route path="/uygunsuzluklar" element={<NonconformityCompanyCardsPage />} />
+        <Route path="/uygunsuzluklar/liste" element={<NonconformitiesListPage />} />
         <Route path="/uygunsuzluklar/yeni" element={<NewNonconformityPage />} />
         <Route path="/uygunsuzluklar/:id" element={<NonconformityDetailPage />} />
         <Route path="/kaza-bildir" element={<NewIncidentPage />} />
@@ -112,7 +114,7 @@ function AppRoutes() {
         <Route
           path="/admin/firmalar"
           element={
-            <PermissionRoute permission="firma_yonetme">
+            <PermissionRoute permission={['firma_yonetme', 'firma_goruntuleme']}>
               <CompaniesPage />
             </PermissionRoute>
           }
@@ -120,7 +122,7 @@ function AppRoutes() {
         <Route
           path="/admin/firmalar/:id"
           element={
-            <PermissionRoute permission="firma_yonetme">
+            <PermissionRoute permission={['firma_yonetme', 'firma_goruntuleme']}>
               <CompanyDetailPage />
             </PermissionRoute>
           }

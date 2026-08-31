@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import apiClient, { getErrorMessage } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { Card, Button, Select, Alert, Badge, Input } from '../components/ui';
@@ -38,6 +38,10 @@ function rangeToDates(range, customFrom, customTo) {
 
 export function NonconformitiesListPage() {
   const { user, hasPermission } = useAuth();
+  const [searchParams] = useSearchParams();
+  // Firma kartları sayfasından "?companyId=..." ile gelinirse liste yalnızca o firmaya filtrelenir.
+  const companyId = searchParams.get('companyId') || '';
+  const [companyName, setCompanyName] = useState('');
   const [items, setItems] = useState(null);
   const [error, setError] = useState(null);
   // Açık uygunsuzluklar en çok ihtiyaç duyulan görünüm olduğundan varsayılan filtre budur.
@@ -72,6 +76,7 @@ export function NonconformitiesListPage() {
     try {
       const params = {};
       if (status) params.status = status;
+      if (companyId) params.companyId = companyId;
       if (user?.isSystemAdmin) params.projectId = adminProjectId;
       const { dateFrom, dateTo } = rangeToDates(range, customFrom, customTo);
       if (dateFrom) params.dateFrom = dateFrom;
@@ -86,12 +91,33 @@ export function NonconformitiesListPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, adminProjectId, range, customFrom, customTo]);
+  }, [status, adminProjectId, range, customFrom, customTo, companyId]);
+
+  // Firma filtreliyken başlıkta firma adını göstermek için ilk sonuçtan alınır (ekstra bir
+  // referans-veri isteği açmadan, listede zaten dönen companyName alanını kullanır).
+  useEffect(() => {
+    if (!companyId) {
+      setCompanyName('');
+      return;
+    }
+    const match = items?.find((n) => n.companyName);
+    if (match) setCompanyName(match.companyName);
+  }, [companyId, items]);
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
+      <Link to="/uygunsuzluklar" className="text-sm text-brand-700 hover:underline">
+        ‹ Firma Kartları
+      </Link>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold text-slate-800">Uygunsuzluklar</h1>
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">Uygunsuzluklar</h1>
+          {companyId && (
+            <p className="mt-0.5 text-sm text-slate-500">
+              Firma filtresi: <span className="font-medium text-slate-700">{companyName || '…'}</span>
+            </p>
+          )}
+        </div>
         <div className="flex flex-wrap gap-2">
           {(hasPermission('uygunsuzluk_acma') || user?.isSystemAdmin) && (
             <Link to="/uygunsuzluklar/yeni">

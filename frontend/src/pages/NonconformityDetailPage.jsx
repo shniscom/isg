@@ -133,7 +133,7 @@ export function NonconformityDetailPage() {
     setDeleteSubmitting(true);
     try {
       await apiClient.delete(`/nonconformities/${id}`);
-      navigate('/uygunsuzluklar');
+      navigate('/uygunsuzluklar/liste');
     } catch (err) {
       setError(getErrorMessage(err));
       setDeleteSubmitting(false);
@@ -289,7 +289,7 @@ export function NonconformityDetailPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <Link to="/uygunsuzluklar" className="text-sm text-brand-700 hover:underline">
+      <Link to="/uygunsuzluklar/liste" className="text-sm text-brand-700 hover:underline">
         ‹ Uygunsuzluklar
       </Link>
 

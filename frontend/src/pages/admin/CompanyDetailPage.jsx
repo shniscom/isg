@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import apiClient, { getErrorMessage } from '../../api/client';
+import { useAuth } from '../../context/AuthContext';
 import { Card, Button, Input, Select, Textarea, Alert, Badge } from '../../components/ui';
 
 const COMPANY_TYPE_LABELS = {
@@ -10,34 +11,6 @@ const COMPANY_TYPE_LABELS = {
   UCUNCU_SAHIS_HIZMET_VEREN: '3. Şahıs Hizmet Veren',
   TEDARIKCI: 'Tedarikçi',
   DIGER: 'Diğer',
-};
-
-const ORG_ROLE_TYPES = [
-  'ISVEREN',
-  'ISVEREN_VEKILI',
-  'SANTIYE_SEFI',
-  'CALISAN_TEMSILCISI',
-  'DESTEK_PERSONELI',
-  'PROJE_MUDURU',
-  'ISG_UZMANI',
-  'ISYERI_HEKIMI',
-  'DIGER_SAGLIK_PERSONELI',
-];
-const EMERGENCY_ROLE_TYPES = ['ILKYARDIM', 'ARAMA_KURTARMA', 'KORUMA'];
-
-const ROLE_TYPE_LABELS = {
-  ISVEREN: 'İşveren',
-  ISVEREN_VEKILI: 'İşveren Vekili',
-  SANTIYE_SEFI: 'Şantiye Şefi',
-  CALISAN_TEMSILCISI: 'Çalışan Temsilcisi',
-  DESTEK_PERSONELI: 'Destek Personeli',
-  PROJE_MUDURU: 'Proje Müdürü',
-  ISG_UZMANI: 'İSG Uzmanı',
-  ISYERI_HEKIMI: 'İşyeri Hekimi',
-  DIGER_SAGLIK_PERSONELI: 'Diğer Sağlık Personeli',
-  ILKYARDIM: 'İlkyardımcı',
-  ARAMA_KURTARMA: 'Arama-Kurtarma',
-  KORUMA: 'Koruma',
 };
 
 const DANGER_CLASS_LABELS = { COK_TEHLIKELI: 'Çok Tehlikeli', TEHLIKELI: 'Tehlikeli', AZ_TEHLIKELI: 'Az Tehlikeli' };
@@ -114,9 +87,13 @@ function SingleFileUploader({ onUploaded, label = 'Dosya Yükle (Fotoğraf/PDF)'
 
 export function CompanyDetailPage() {
   const { id } = useParams();
+  const { hasPermission } = useAuth();
+  const canManage = hasPermission('firma_yonetme');
   const [detail, setDetail] = useState(null);
   const [employees, setEmployees] = useState([]);
   const [equipmentList, setEquipmentList] = useState(null);
+  const [projectBlocks, setProjectBlocks] = useState([]);
+  const [roleTypes, setRoleTypes] = useState([]);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [tab, setTab] = useState('genel');
@@ -127,6 +104,8 @@ export function CompanyDetailPage() {
       setDetail(data);
       const empRes = await apiClient.get('/employees', { params: { projectId: data.company.projectId, companyId: id, status: 'active' } });
       setEmployees(empRes.data.employees);
+      const blocksRes = await apiClient.get(`/admin/projects/${data.company.projectId}/blocks`);
+      setProjectBlocks(blocksRes.data.blocks);
     } catch (err) {
       setError(getErrorMessage(err));
     }
@@ -144,13 +123,17 @@ export function CompanyDetailPage() {
   useEffect(() => {
     loadDetail();
     loadEquipment();
+    apiClient
+      .get('/admin/company-role-types')
+      .then(({ data }) => setRoleTypes(data.roleTypes))
+      .catch(() => setRoleTypes([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   if (error && !detail) return <Alert>{error}</Alert>;
   if (!detail) return <p className="text-sm text-slate-500">Yükleniyor...</p>;
 
-  const { company, roleAssignments, incidents, documents, boardMeetings, boardStatus, equipmentCount, mykStats, penalties } = detail;
+  const { company, blocks, roleAssignments, incidents, documents, boardMeetings, boardStatus, equipmentCount, mykStats, penalties } = detail;
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
@@ -184,17 +167,30 @@ export function CompanyDetailPage() {
       {tab === 'genel' && (
         <GenelTab
           company={company}
+          blocks={blocks}
+          projectBlocks={projectBlocks}
           mykStats={mykStats}
           penalties={penalties}
           incidents={incidents}
           equipmentCount={equipmentCount}
+          canManage={canManage}
           onUpdated={(c) => setDetail((d) => ({ ...d, company: c }))}
+          onBlocksUpdated={(newBlocks) => setDetail((d) => ({ ...d, blocks: newBlocks }))}
           setError={setError}
           setNotice={setNotice}
         />
       )}
       {tab === 'roller' && (
-        <RollerTab companyId={id} roles={roleAssignments} employees={employees} onChange={loadDetail} setError={setError} setNotice={setNotice} />
+        <RollerTab
+          companyId={id}
+          roles={roleAssignments}
+          employees={employees}
+          roleTypes={roleTypes}
+          canManage={canManage}
+          onChange={loadDetail}
+          setError={setError}
+          setNotice={setNotice}
+        />
       )}
       {tab === 'kaza' && (
         <KazaTab companyId={id} incidents={incidents.recent} employees={employees} onChange={loadDetail} setError={setError} setNotice={setNotice} />
@@ -227,9 +223,30 @@ function StatCard({ label, value, tone = 'default' }) {
   );
 }
 
-function GenelTab({ company, mykStats, penalties, incidents, equipmentCount, onUpdated, setError, setNotice }) {
+function GenelTab({ company, blocks, projectBlocks, mykStats, penalties, incidents, equipmentCount, canManage, onUpdated, onBlocksUpdated, setError, setNotice }) {
   const [form, setForm] = useState({ requiresBoard: company.requiresBoard, dangerClass: company.dangerClass || '' });
   const [saving, setSaving] = useState(false);
+  const [blockIds, setBlockIds] = useState((blocks || []).map((b) => b.id));
+  const [savingBlocks, setSavingBlocks] = useState(false);
+
+  function toggleBlock(blockId) {
+    setBlockIds((prev) => (prev.includes(blockId) ? prev.filter((id) => id !== blockId) : [...prev, blockId]));
+  }
+
+  async function handleSaveBlocks() {
+    setSavingBlocks(true);
+    setError(null);
+    try {
+      const { data } = await apiClient.patch(`/admin/companies/${company.id}`, { blockIds });
+      onBlocksUpdated((projectBlocks || []).filter((b) => blockIds.includes(b.id)));
+      onUpdated(data.company);
+      setNotice('Sorumlu bölgeler güncellendi.');
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setSavingBlocks(false);
+    }
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -260,6 +277,50 @@ function GenelTab({ company, mykStats, penalties, incidents, equipmentCount, onU
       </div>
 
       <Card>
+        <h3 className="mb-3 font-semibold text-slate-800">Sorumlu Olduğu Bölgeler</h3>
+        {!projectBlocks || projectBlocks.length === 0 ? (
+          <p className="text-sm text-slate-500">Bu projede henüz bölge/blok tanımlanmamış - firma varsayılan olarak tüm proje kapsamında sorumlu sayılır.</p>
+        ) : canManage ? (
+          <div className="space-y-3">
+            <p className="text-xs text-slate-500">Hiçbiri seçilmezse firma "Tüm Bölgeler"den sorumlu sayılır.</p>
+            <div className="flex flex-wrap gap-2">
+              {projectBlocks.map((b) => {
+                const selected = blockIds.includes(b.id);
+                return (
+                  <button
+                    key={b.id}
+                    type="button"
+                    onClick={() => toggleBlock(b.id)}
+                    className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                      selected ? 'border-brand-600 bg-brand-50 text-brand-800' : 'border-slate-300 text-slate-600 hover:border-brand-300'
+                    }`}
+                  >
+                    {selected ? '✓ ' : ''}
+                    {b.name}
+                  </button>
+                );
+              })}
+            </div>
+            <Button variant="secondary" onClick={handleSaveBlocks} disabled={savingBlocks}>
+              {savingBlocks ? 'Kaydediliyor...' : 'Bölgeleri Kaydet'}
+            </Button>
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {blocks && blocks.length > 0 ? (
+              blocks.map((b) => (
+                <Badge key={b.id} variant="default">
+                  📍 {b.name}
+                </Badge>
+              ))
+            ) : (
+              <Badge variant="default">📍 Tüm Bölgeler</Badge>
+            )}
+          </div>
+        )}
+      </Card>
+
+      <Card>
         <h3 className="mb-3 font-semibold text-slate-800">Ceza Durumu</h3>
         <div className="mb-3 flex flex-wrap gap-2">
           <Badge variant="warning">Onay Bekliyor – {penalties.counts.pending}</Badge>
@@ -286,13 +347,14 @@ function GenelTab({ company, mykStats, penalties, incidents, equipmentCount, onU
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input
               type="checkbox"
+              disabled={!canManage}
               checked={form.requiresBoard}
               onChange={(e) => setForm((f) => ({ ...f, requiresBoard: e.target.checked }))}
             />
             Bu firma için İSG kurulu kurulması gerekiyor
           </label>
           {form.requiresBoard && (
-            <Select label="Tehlike Sınıfı" value={form.dangerClass} onChange={(e) => setForm((f) => ({ ...f, dangerClass: e.target.value }))}>
+            <Select label="Tehlike Sınıfı" value={form.dangerClass} disabled={!canManage} onChange={(e) => setForm((f) => ({ ...f, dangerClass: e.target.value }))}>
               <option value="">Seçiniz</option>
               {Object.entries(DANGER_CLASS_LABELS).map(([k, v]) => (
                 <option key={k} value={k}>
@@ -301,19 +363,24 @@ function GenelTab({ company, mykStats, penalties, incidents, equipmentCount, onU
               ))}
             </Select>
           )}
-          <Button onClick={handleSave} disabled={saving}>
-            {saving ? 'Kaydediliyor...' : 'Kaydet'}
-          </Button>
+          {canManage && (
+            <Button onClick={handleSave} disabled={saving}>
+              {saving ? 'Kaydediliyor...' : 'Kaydet'}
+            </Button>
+          )}
         </div>
       </Card>
     </div>
   );
 }
 
-function RollerTab({ companyId, roles, employees, onChange, setError, setNotice }) {
+function RollerTab({ companyId, roles, employees, roleTypes, canManage, onChange, setError, setNotice }) {
   const [showForm, setShowForm] = useState(false);
+  const roleLabel = (key) => roleTypes.find((rt) => rt.key === key)?.label || key;
+  const firmaRolleri = roleTypes.filter((rt) => rt.category === 'FIRMA_ROLU');
+  const acilEkipleri = roleTypes.filter((rt) => rt.category === 'ACIL_EKIP');
   const [form, setForm] = useState({
-    roleType: 'DESTEK_PERSONELI',
+    roleType: '',
     source: 'CALISAN',
     employeeId: '',
     outsideFullName: '',
@@ -326,6 +393,17 @@ function RollerTab({ companyId, roles, employees, onChange, setError, setNotice 
     certificateEndDate: '',
   });
   const [submitting, setSubmitting] = useState(false);
+
+  // Rol kataloğu yüklenince (veya değişince), formdaki seçili rolün hâlâ geçerli olduğundan
+  // emin ol; değilse ilk seçeneğe düş - Görevler sayfasından yeni bir rol eklenip silinmiş
+  // olabileceği için bu form aynı sekmede uzun süre açık kalırsa da tutarlı kalır.
+  useEffect(() => {
+    if (roleTypes.length === 0) return;
+    if (!roleTypes.some((rt) => rt.key === form.roleType)) {
+      setForm((f) => ({ ...f, roleType: roleTypes[0].key }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roleTypes]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -355,7 +433,8 @@ function RollerTab({ companyId, roles, employees, onChange, setError, setNotice 
   }
 
   function RoleGroup({ title, types }) {
-    const rows = roles.filter((r) => types.includes(r.roleType));
+    const typeKeys = new Set(types.map((t) => t.key));
+    const rows = roles.filter((r) => typeKeys.has(r.roleType));
     return (
       <Card>
         <h3 className="mb-3 font-semibold text-slate-800">{title}</h3>
@@ -365,7 +444,7 @@ function RollerTab({ companyId, roles, employees, onChange, setError, setNotice 
             <div key={r.id} className="rounded-lg bg-slate-50 px-3 py-2 text-sm">
               <div className="flex items-center justify-between">
                 <div>
-                  <Badge variant="purple">{ROLE_TYPE_LABELS[r.roleType]}</Badge>
+                  <Badge variant="purple">{roleLabel(r.roleType)}</Badge>
                   <span className="ml-2 font-medium text-slate-800">
                     {r.source === 'CALISAN' ? r.employeeFullName : r.outsideFullName}
                   </span>
@@ -373,9 +452,11 @@ function RollerTab({ companyId, roles, employees, onChange, setError, setNotice 
                     <span className="ml-1 text-xs text-slate-500">({r.outsideCompanyName})</span>
                   )}
                 </div>
-                <button onClick={() => handleDelete(r.id)} className="text-xs text-red-600 hover:underline">
-                  Sil
-                </button>
+                {canManage && (
+                  <button onClick={() => handleDelete(r.id)} className="text-xs text-red-600 hover:underline">
+                    Sil
+                  </button>
+                )}
               </div>
               {(r.certificateNo || r.certificateClass || r.certificateStartDate) && (
                 <div className="mt-1 text-xs text-slate-500">
@@ -393,10 +474,10 @@ function RollerTab({ companyId, roles, employees, onChange, setError, setNotice 
 
   return (
     <div className="space-y-4">
-      <RoleGroup title="Firma Rolleri" types={ORG_ROLE_TYPES} />
-      <RoleGroup title="Acil Durum Ekipleri" types={EMERGENCY_ROLE_TYPES} />
+      <RoleGroup title="Firma Rolleri" types={firmaRolleri} />
+      <RoleGroup title="Acil Durum Ekipleri" types={acilEkipleri} />
 
-      {!showForm ? (
+      {!canManage ? null : !showForm ? (
         <Button variant="secondary" onClick={() => setShowForm(true)}>
           + Rol Ekle
         </Button>
@@ -405,16 +486,16 @@ function RollerTab({ companyId, roles, employees, onChange, setError, setNotice 
           <form onSubmit={handleSubmit} className="space-y-3">
             <Select label="Rol" value={form.roleType} onChange={(e) => setForm((f) => ({ ...f, roleType: e.target.value }))}>
               <optgroup label="Firma Rolleri">
-                {ORG_ROLE_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {ROLE_TYPE_LABELS[t]}
+                {firmaRolleri.map((t) => (
+                  <option key={t.key} value={t.key}>
+                    {t.label}
                   </option>
                 ))}
               </optgroup>
               <optgroup label="Acil Durum Ekipleri">
-                {EMERGENCY_ROLE_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {ROLE_TYPE_LABELS[t]}
+                {acilEkipleri.map((t) => (
+                  <option key={t.key} value={t.key}>
+                    {t.label}
                   </option>
                 ))}
               </optgroup>

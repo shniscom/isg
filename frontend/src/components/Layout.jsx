@@ -11,7 +11,7 @@ const NAV_ITEMS = [
   { to: '/raporlar', label: 'Raporlar', icon: '📊', permission: 'rapor_goruntuleme' },
   { to: '/cezalar', label: 'Cezalar', icon: '⚖️', permission: 'cezai_islem' },
   { to: '/admin/projeler', label: 'Projeler', icon: '🏗️', permission: 'proje_yonetme' },
-  { to: '/admin/firmalar', label: 'Firmalar', icon: '🏢', permission: 'firma_yonetme' },
+  { to: '/admin/firmalar', label: 'Firmalar', icon: '🏢', permission: ['firma_yonetme', 'firma_goruntuleme'] },
   { to: '/admin/kullanicilar', label: 'Kullanıcılar', icon: '👤', permission: 'kullanici_yonetme' },
   { to: '/admin/gorevler', label: 'Görevler', icon: '🎯', permission: 'kullanici_yonetme' },
   { to: '/admin/kategoriler', label: 'Kategoriler', icon: '🏷️', adminOnly: true },
@@ -25,7 +25,10 @@ function NavItems({ onNavigate }) {
     <>
       {NAV_ITEMS.filter((item) => {
         if (item.adminOnly) return user?.isSystemAdmin;
-        if (item.permission) return hasPermission(item.permission);
+        if (item.permission) {
+          const keys = Array.isArray(item.permission) ? item.permission : [item.permission];
+          return keys.some((key) => hasPermission(key));
+        }
         return true;
       }).map((item) => (
         <NavLink

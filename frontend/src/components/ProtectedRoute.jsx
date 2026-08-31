@@ -19,8 +19,11 @@ export function AdminRoute({ children }) {
   return <ProtectedRoute>{children}</ProtectedRoute>;
 }
 
+/** `permission` tekil bir yetki anahtarı ya da bir dizi olabilir; dizi verilirse bunlardan
+ * herhangi birine sahip olmak yeterlidir (ör. 'firma_yonetme' VEYA 'firma_goruntuleme'). */
 export function PermissionRoute({ permission, children }) {
   const { hasPermission } = useAuth();
-  if (!hasPermission(permission)) return <Navigate to="/" replace />;
+  const keys = Array.isArray(permission) ? permission : [permission];
+  if (!keys.some((key) => hasPermission(key))) return <Navigate to="/" replace />;
   return <ProtectedRoute>{children}</ProtectedRoute>;
 }

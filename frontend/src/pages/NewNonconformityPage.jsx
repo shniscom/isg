@@ -180,7 +180,7 @@ export function NewNonconformityPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <Link to="/uygunsuzluklar" className="text-sm text-brand-700 hover:underline">
+      <Link to="/uygunsuzluklar/liste" className="text-sm text-brand-700 hover:underline">
         ‹ Uygunsuzluklar
       </Link>
       <h1 className="text-2xl font-bold text-slate-800">Yeni Uygunsuzluk</h1>

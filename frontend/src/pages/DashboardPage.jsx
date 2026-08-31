@@ -82,7 +82,7 @@ export function DashboardPage() {
           <div>
             <div className="mb-2 flex items-center justify-between">
               <h2 className="text-sm font-semibold text-slate-700">Bana Atanan Uygunsuzluklar</h2>
-              <Link to="/uygunsuzluklar" className="text-xs font-medium text-brand-700 hover:underline">
+              <Link to="/uygunsuzluklar/liste" className="text-xs font-medium text-brand-700 hover:underline">
                 Tüm liste →
               </Link>
             </div>
