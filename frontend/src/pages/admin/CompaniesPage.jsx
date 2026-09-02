@@ -16,7 +16,14 @@ const COMPANY_TYPES = [
 
 const typeLabel = (value) => COMPANY_TYPES.find((t) => t.value === value)?.label || value;
 
-const EMPTY_FORM = { name: '', type: 'DIGER', taxNumber: '', sgkNumber: '', phone: '', scopeOfWork: '', blockIds: [] };
+const DANGER_CLASSES = [
+  { value: '', label: 'Seçilmedi' },
+  { value: 'AZ_TEHLIKELI', label: 'Az Tehlikeli' },
+  { value: 'TEHLIKELI', label: 'Tehlikeli' },
+  { value: 'COK_TEHLIKELI', label: 'Çok Tehlikeli' },
+];
+
+const EMPTY_FORM = { name: '', type: 'DIGER', taxNumber: '', sgkNumber: '', phone: '', scopeOfWork: '', dangerClass: '', blockIds: [] };
 
 /** Bölge seçim listesi: checkbox'lar. Hiçbiri seçilmezse "Tüm Bölgeler" (proje genelinden sorumlu) anlamına gelir. */
 function BlockSelector({ blocks, value, onChange }) {
@@ -92,6 +99,7 @@ export function CompaniesPage() {
   const [tempEmployees, setTempEmployees] = useState(null);
   const [showAddTempCompany, setShowAddTempCompany] = useState(false);
   const [newTempCompanyName, setNewTempCompanyName] = useState('');
+  const [newTempCompanyExtra, setNewTempCompanyExtra] = useState({ scopeOfWork: '', dangerClass: '', sgkNumber: '', taxNumber: '' });
   const [addTempSubmitting, setAddTempSubmitting] = useState(false);
   const [addTempError, setAddTempError] = useState(null);
   const [projectBlocks, setProjectBlocks] = useState([]);
@@ -161,7 +169,7 @@ export function CompaniesPage() {
     setFormError(null);
     setSubmitting(true);
     try {
-      await apiClient.post('/admin/companies', { ...form, projectId: selectedProjectId });
+      await apiClient.post('/admin/companies', { ...form, dangerClass: form.dangerClass || null, projectId: selectedProjectId });
       setForm(EMPTY_FORM);
       setShowForm(false);
       await loadCompanies(selectedProjectId);
@@ -212,6 +220,7 @@ export function CompaniesPage() {
       sgkNumber: company.sgkNumber || '',
       phone: company.phone || '',
       scopeOfWork: company.scopeOfWork || '',
+      dangerClass: company.dangerClass || '',
       blockIds: (company.summary?.blocks || []).map((b) => b.id),
     });
   }
@@ -229,7 +238,7 @@ export function CompaniesPage() {
     setNotice(null);
     setEditSubmitting(true);
     try {
-      const { data } = await apiClient.patch(`/admin/companies/${editingId}`, editForm);
+      const { data } = await apiClient.patch(`/admin/companies/${editingId}`, { ...editForm, dangerClass: editForm.dangerClass || null });
       if (data.queued) {
         setNotice('Firma düzenlemesi admin onayına gönderildi. Admin onaylarsa uygulanacak.');
       }
@@ -268,9 +277,14 @@ export function CompaniesPage() {
         projectId: selectedProjectId,
         name: newTempCompanyName.trim(),
         isTemporaryAssignment: true,
+        scopeOfWork: newTempCompanyExtra.scopeOfWork.trim() || null,
+        dangerClass: newTempCompanyExtra.dangerClass || null,
+        sgkNumber: newTempCompanyExtra.sgkNumber.trim() || null,
+        taxNumber: newTempCompanyExtra.taxNumber.trim() || null,
       });
       setShowAddTempCompany(false);
       setNewTempCompanyName('');
+      setNewTempCompanyExtra({ scopeOfWork: '', dangerClass: '', sgkNumber: '', taxNumber: '' });
       if (data.queued) {
         setNotice(data.message || 'Firma admin onayına gönderildi.');
       } else {
@@ -351,7 +365,11 @@ export function CompaniesPage() {
                   >
                     <div>
                       <div className="font-medium text-slate-800">{c.name}</div>
-                      <div className="text-xs text-slate-500">{c.summary?.employeeCount || 0} çalışan</div>
+                      <div className="text-xs text-slate-500">
+                        {c.summary?.employeeCount || 0} çalışan
+                        {c.sgkNumber ? ` · SGK: ${c.sgkNumber}` : ''}
+                        {c.scopeOfWork ? ` · ${c.scopeOfWork}` : ''}
+                      </div>
                     </div>
                     <span className="text-slate-300">›</span>
                   </button>
@@ -367,7 +385,35 @@ export function CompaniesPage() {
                     </Button>
                   ) : (
                     <div className="space-y-2 rounded-lg border border-amber-200 bg-surface p-2.5">
-                      <Input label="Firma Adı" value={newTempCompanyName} onChange={(e) => setNewTempCompanyName(e.target.value)} />
+                      <Input label="Firma Adı *" value={newTempCompanyName} onChange={(e) => setNewTempCompanyName(e.target.value)} />
+                      <Input
+                        label="Sahada Yaptığı İş / İş Kolu"
+                        value={newTempCompanyExtra.scopeOfWork}
+                        onChange={(e) => setNewTempCompanyExtra((f) => ({ ...f, scopeOfWork: e.target.value }))}
+                      />
+                      <Select
+                        label="Tehlike Sınıfı"
+                        value={newTempCompanyExtra.dangerClass}
+                        onChange={(e) => setNewTempCompanyExtra((f) => ({ ...f, dangerClass: e.target.value }))}
+                      >
+                        {DANGER_CLASSES.map((d) => (
+                          <option key={d.value} value={d.value}>
+                            {d.label}
+                          </option>
+                        ))}
+                      </Select>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input
+                          label="SGK Sicil No"
+                          value={newTempCompanyExtra.sgkNumber}
+                          onChange={(e) => setNewTempCompanyExtra((f) => ({ ...f, sgkNumber: e.target.value }))}
+                        />
+                        <Input
+                          label="Vergi No"
+                          value={newTempCompanyExtra.taxNumber}
+                          onChange={(e) => setNewTempCompanyExtra((f) => ({ ...f, taxNumber: e.target.value }))}
+                        />
+                      </div>
                       <div className="flex gap-2">
                         <Button type="button" onClick={handleAddTempCompany} disabled={addTempSubmitting || !newTempCompanyName.trim()}>
                           {addTempSubmitting ? 'Ekleniyor...' : 'Kaydet'}
@@ -452,6 +498,13 @@ export function CompaniesPage() {
                 value={form.scopeOfWork}
                 onChange={(e) => setForm({ ...form, scopeOfWork: e.target.value })}
               />
+              <Select label="Tehlike Sınıfı" value={form.dangerClass} onChange={(e) => setForm({ ...form, dangerClass: e.target.value })}>
+                {DANGER_CLASSES.map((d) => (
+                  <option key={d.value} value={d.value}>
+                    {d.label}
+                  </option>
+                ))}
+              </Select>
             </div>
             <BlockSelector blocks={projectBlocks} value={form.blockIds} onChange={(blockIds) => setForm({ ...form, blockIds })} />
             <Button type="submit" disabled={submitting}>
@@ -572,6 +625,13 @@ export function CompaniesPage() {
                       value={editForm.scopeOfWork}
                       onChange={(e) => setEditForm({ ...editForm, scopeOfWork: e.target.value })}
                     />
+                    <Select label="Tehlike Sınıfı" value={editForm.dangerClass} onChange={(e) => setEditForm({ ...editForm, dangerClass: e.target.value })}>
+                      {DANGER_CLASSES.map((d) => (
+                        <option key={d.value} value={d.value}>
+                          {d.label}
+                        </option>
+                      ))}
+                    </Select>
                   </div>
                   <BlockSelector blocks={projectBlocks} value={editForm.blockIds} onChange={(blockIds) => setEditForm({ ...editForm, blockIds })} />
                   <div className="flex gap-2">

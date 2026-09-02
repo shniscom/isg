@@ -17,6 +17,12 @@ const SORT_OPTIONS = [
   { value: 'startDate', label: 'Giriş Tarihine Göre (Yeni-Eski)' },
 ];
 
+const DANGER_CLASSES = [
+  { value: 'AZ_TEHLIKELI', label: 'Az Tehlikeli' },
+  { value: 'TEHLIKELI', label: 'Tehlikeli' },
+  { value: 'COK_TEHLIKELI', label: 'Çok Tehlikeli' },
+];
+
 const CHIP_TONE_CLASS = {
   default: 'bg-slate-100 text-slate-600',
   success: 'bg-emerald-100 text-emerald-700',
@@ -38,8 +44,16 @@ const EMPTY_TEMP_EMPLOYEE = {
   sgkEntryDocExists: false,
   isgTrainingDate: '',
   isgTrainingExpiryDate: '',
+  isgTrainerName: '',
+  isgTrainerCertificateNo: '',
   orientationTrainingDate: '',
   ppeHandoverDocExists: false,
+  medicalExamDate: '',
+  ek2Suitable: false,
+  ek2Date: '',
+  healthAuthorityDoctorName: '',
+  healthAuthorityCertificateNo: '',
+  mykCertificateNo: '',
 };
 
 export function EmployeesPage() {
@@ -64,6 +78,7 @@ export function EmployeesPage() {
   const [showTempPanel, setShowTempPanel] = useState(false);
   const [showAddTempCompany, setShowAddTempCompany] = useState(false);
   const [newTempCompanyName, setNewTempCompanyName] = useState('');
+  const [newTempCompanyExtra, setNewTempCompanyExtra] = useState({ scopeOfWork: '', dangerClass: '', sgkNumber: '', taxNumber: '' });
   const [addTempCompanySubmitting, setAddTempCompanySubmitting] = useState(false);
   const [addTempCompanyError, setAddTempCompanyError] = useState(null);
   const [tempNotice, setTempNotice] = useState(null);
@@ -81,7 +96,11 @@ export function EmployeesPage() {
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('fullName');
   const [statusTab, setStatusTab] = useState('active'); // 'active' | 'archived'
-  const [filterTab, setFilterTab] = useState('all'); // 'all' | 'myk' | 'untrained' | 'medicalExam' | 'isgRole'
+  const [filterKeys, setFilterKeys] = useState(() => new Set()); // çoklu seçmeli filtre anahtarları - bkz. FILTER_OPTIONS
+  const [showSortMenu, setShowSortMenu] = useState(false);
+  const [showFilterMenu, setShowFilterMenu] = useState(false);
+  const sortMenuRef = useRef(null);
+  const filterMenuRef = useRef(null);
   const [stats, setStats] = useState(null);
 
   const [importing, setImporting] = useState(false);
@@ -160,7 +179,7 @@ export function EmployeesPage() {
   function loadEmployees() {
     if (!activeProjectId || !selectedCompany) return;
     const params = { companyId: selectedCompany.id, status: statusTab, sortBy };
-    if (filterTab !== 'all') params.filter = filterTab;
+    if (filterKeys.size > 0) params.filters = Array.from(filterKeys).join(',');
     if (user?.isSystemAdmin) params.projectId = activeProjectId;
     if (search) params.q = search;
     apiClient
@@ -186,7 +205,7 @@ export function EmployeesPage() {
   useEffect(() => {
     loadEmployees();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCompany, statusTab, sortBy, search, filterTab]);
+  }, [selectedCompany, statusTab, sortBy, search, filterKeys]);
 
   useEffect(() => {
     loadStats();
@@ -194,16 +213,36 @@ export function EmployeesPage() {
   }, [selectedCompany, statusTab, search]);
 
   useEffect(() => {
-    setFilterTab('all');
+    setFilterKeys(new Set());
   }, [selectedCompany, statusTab]);
 
-  const FILTER_TABS = [
-    { value: 'all', label: 'Tümü', count: stats?.total },
-    { value: 'myk', label: 'MYK', count: stats?.myk },
-    { value: 'untrained', label: 'Eğitimsiz', count: stats?.untrained },
-    { value: 'medicalExam', label: 'Tetkik', count: stats?.medicalExam },
-    { value: 'isgRole', label: 'İSG Görevi', count: stats?.isgRole },
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (sortMenuRef.current && !sortMenuRef.current.contains(e.target)) setShowSortMenu(false);
+      if (filterMenuRef.current && !filterMenuRef.current.contains(e.target)) setShowFilterMenu(false);
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const FILTER_OPTIONS = [
+    { value: 'noMyk', label: 'MYK Belgesi Yok', count: stats?.noMyk },
+    { value: 'noMedicalExam', label: 'Tetkik Yok', count: stats?.noMedicalExam },
+    { value: 'noTraining', label: 'Eğitim Yok', count: stats?.noTraining },
+    { value: 'trainingExpired', label: 'Eğitim Süresi Dolmuş', count: stats?.trainingExpired },
+    { value: 'hasIsgRole', label: 'İSG Görevi Var', count: stats?.hasIsgRole },
   ];
+
+  function toggleFilterKey(key) {
+    setFilterKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  const activeSortLabel = SORT_OPTIONS.find((o) => o.value === sortBy)?.label || 'Sırala';
 
   async function handleFileChange(e) {
     const file = e.target.files?.[0];
@@ -267,9 +306,14 @@ export function EmployeesPage() {
         projectId: effectiveProjectId,
         name: newTempCompanyName.trim(),
         isTemporaryAssignment: true,
+        scopeOfWork: newTempCompanyExtra.scopeOfWork.trim() || null,
+        dangerClass: newTempCompanyExtra.dangerClass || null,
+        sgkNumber: newTempCompanyExtra.sgkNumber.trim() || null,
+        taxNumber: newTempCompanyExtra.taxNumber.trim() || null,
       });
       setShowAddTempCompany(false);
       setNewTempCompanyName('');
+      setNewTempCompanyExtra({ scopeOfWork: '', dangerClass: '', sgkNumber: '', taxNumber: '' });
       if (data?.queued) {
         setTempNotice(data.message || 'Firma admin onayına gönderildi.');
       } else {
@@ -298,8 +342,16 @@ export function EmployeesPage() {
         sgkEntryDocExists: tempEmployeeForm.sgkEntryDocExists,
         isgTrainingDate: tempEmployeeForm.isgTrainingDate || null,
         isgTrainingExpiryDate: tempEmployeeForm.isgTrainingExpiryDate || null,
+        isgTrainerName: tempEmployeeForm.isgTrainerName.trim() || null,
+        isgTrainerCertificateNo: tempEmployeeForm.isgTrainerCertificateNo.trim() || null,
         orientationTrainingDate: tempEmployeeForm.orientationTrainingDate || null,
         ppeHandoverDocExists: tempEmployeeForm.ppeHandoverDocExists,
+        medicalExamDate: tempEmployeeForm.medicalExamDate || null,
+        ek2Suitable: tempEmployeeForm.ek2Suitable,
+        ek2Date: tempEmployeeForm.ek2Date || null,
+        healthAuthorityDoctorName: tempEmployeeForm.healthAuthorityDoctorName.trim() || null,
+        healthAuthorityCertificateNo: tempEmployeeForm.healthAuthorityCertificateNo.trim() || null,
+        mykCertificateNo: tempEmployeeForm.mykCertificateNo.trim() || null,
       };
       if (user?.isSystemAdmin) payload.projectId = activeProjectId;
       const { data } = await apiClient.post('/employees', payload);
@@ -467,6 +519,7 @@ export function EmployeesPage() {
                       <div className="text-xs text-slate-500">
                         {c.activeEmployeeCount} aktif çalışan
                         {c.archivedEmployeeCount > 0 ? ` · ${c.archivedEmployeeCount} arşivde` : ''}
+                        {c.sgkNumber ? ` · SGK: ${c.sgkNumber}` : ''}
                       </div>
                     </div>
                     <span className="text-slate-300">›</span>
@@ -483,10 +536,39 @@ export function EmployeesPage() {
                     ) : (
                       <div className="space-y-2 rounded-lg border border-amber-200 bg-surface p-2.5">
                         <Input
-                          label="Firma Adı"
+                          label="Firma Adı *"
                           value={newTempCompanyName}
                           onChange={(e) => setNewTempCompanyName(e.target.value)}
                         />
+                        <Input
+                          label="Sahada Yaptığı İş / İş Kolu"
+                          value={newTempCompanyExtra.scopeOfWork}
+                          onChange={(e) => setNewTempCompanyExtra((f) => ({ ...f, scopeOfWork: e.target.value }))}
+                        />
+                        <Select
+                          label="Tehlike Sınıfı"
+                          value={newTempCompanyExtra.dangerClass}
+                          onChange={(e) => setNewTempCompanyExtra((f) => ({ ...f, dangerClass: e.target.value }))}
+                        >
+                          <option value="">Seçilmedi</option>
+                          {DANGER_CLASSES.map((d) => (
+                            <option key={d.value} value={d.value}>
+                              {d.label}
+                            </option>
+                          ))}
+                        </Select>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Input
+                            label="SGK Sicil No"
+                            value={newTempCompanyExtra.sgkNumber}
+                            onChange={(e) => setNewTempCompanyExtra((f) => ({ ...f, sgkNumber: e.target.value }))}
+                          />
+                          <Input
+                            label="Vergi No"
+                            value={newTempCompanyExtra.taxNumber}
+                            onChange={(e) => setNewTempCompanyExtra((f) => ({ ...f, taxNumber: e.target.value }))}
+                          />
+                        </div>
                         <div className="flex gap-2">
                           <Button type="button" onClick={handleAddTempCompany} disabled={addTempCompanySubmitting || !newTempCompanyName.trim()}>
                             {addTempCompanySubmitting ? 'Ekleniyor...' : 'Kaydet'}
@@ -567,30 +649,81 @@ export function EmployeesPage() {
         </button>
       </div>
 
-      <div className="flex gap-2 overflow-x-auto pb-1">
-        {FILTER_TABS.map((f) => (
-          <button
-            key={f.value}
-            type="button"
-            onClick={() => setFilterTab(f.value)}
-            className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium transition ${
-              filterTab === f.value ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600'
-            }`}
-          >
-            {f.label} ({f.count ?? '…'})
-          </button>
-        ))}
-      </div>
-
       <div className="flex flex-col gap-2 sm:flex-row">
         <Input placeholder="İsim veya TC no ara..." value={search} onChange={(e) => setSearch(e.target.value)} className="sm:flex-1" />
-        <Select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="sm:w-56">
-          {SORT_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </Select>
+
+        <div className="relative" ref={sortMenuRef}>
+          <button
+            type="button"
+            onClick={() => {
+              setShowSortMenu((v) => !v);
+              setShowFilterMenu(false);
+            }}
+            className="flex w-full items-center justify-center gap-1.5 rounded-[var(--btn-radius)] border border-slate-300 bg-surface px-4 py-3 text-sm font-medium text-slate-700 sm:w-auto"
+          >
+            ↕️ Sırala: {activeSortLabel}
+          </button>
+          {showSortMenu && (
+            <div className="absolute right-0 z-30 mt-1 w-56 overflow-hidden rounded-xl border border-slate-200 bg-surface shadow-lg">
+              {SORT_OPTIONS.map((o) => (
+                <button
+                  key={o.value}
+                  type="button"
+                  onClick={() => {
+                    setSortBy(o.value);
+                    setShowSortMenu(false);
+                  }}
+                  className={`block w-full px-4 py-2.5 text-left text-sm hover:bg-brand-50 ${
+                    sortBy === o.value ? 'bg-brand-50 font-medium text-brand-700' : 'text-slate-700'
+                  }`}
+                >
+                  {sortBy === o.value ? '✓ ' : ''}
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="relative" ref={filterMenuRef}>
+          <button
+            type="button"
+            onClick={() => {
+              setShowFilterMenu((v) => !v);
+              setShowSortMenu(false);
+            }}
+            className="flex w-full items-center justify-center gap-1.5 rounded-[var(--btn-radius)] border border-slate-300 bg-surface px-4 py-3 text-sm font-medium text-slate-700 sm:w-auto"
+          >
+            🔍 Filtrele{filterKeys.size > 0 ? ` (${filterKeys.size})` : ''}
+          </button>
+          {showFilterMenu && (
+            <div className="absolute right-0 z-30 mt-1 w-64 overflow-hidden rounded-xl border border-slate-200 bg-surface shadow-lg">
+              <div className="max-h-72 overflow-y-auto py-1">
+                {FILTER_OPTIONS.map((f) => (
+                  <label
+                    key={f.value}
+                    className="flex cursor-pointer items-center justify-between gap-2 px-4 py-2.5 text-sm text-slate-700 hover:bg-brand-50"
+                  >
+                    <span className="flex items-center gap-2">
+                      <input type="checkbox" checked={filterKeys.has(f.value)} onChange={() => toggleFilterKey(f.value)} />
+                      {f.label}
+                    </span>
+                    <span className="text-xs text-slate-400">{f.count ?? '…'}</span>
+                  </label>
+                ))}
+              </div>
+              {filterKeys.size > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setFilterKeys(new Set())}
+                  className="block w-full border-t border-slate-100 px-4 py-2 text-left text-xs font-medium text-slate-500 hover:bg-slate-50"
+                >
+                  Filtreleri temizle
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {canManageEmployees && !selectedCompany.isTemporaryAssignment && (
@@ -763,11 +896,60 @@ export function EmployeesPage() {
             value={tempEmployeeForm.isgTrainingExpiryDate}
             onChange={(e) => setTempEmployeeForm((f) => ({ ...f, isgTrainingExpiryDate: e.target.value }))}
           />
+          <div className="grid grid-cols-2 gap-2">
+            <Input
+              label="İSG Uzmanı Ad Soyad"
+              value={tempEmployeeForm.isgTrainerName}
+              onChange={(e) => setTempEmployeeForm((f) => ({ ...f, isgTrainerName: e.target.value }))}
+            />
+            <Input
+              label="İSG Uzmanı Sertifika No"
+              value={tempEmployeeForm.isgTrainerCertificateNo}
+              onChange={(e) => setTempEmployeeForm((f) => ({ ...f, isgTrainerCertificateNo: e.target.value }))}
+            />
+          </div>
           <Input
             label="Oryantasyon Eğitim Tarihi"
             type="date"
             value={tempEmployeeForm.orientationTrainingDate}
             onChange={(e) => setTempEmployeeForm((f) => ({ ...f, orientationTrainingDate: e.target.value }))}
+          />
+          <Input
+            label="Tetkik Tarihi"
+            type="date"
+            value={tempEmployeeForm.medicalExamDate}
+            onChange={(e) => setTempEmployeeForm((f) => ({ ...f, medicalExamDate: e.target.value }))}
+          />
+          <Input
+            label="Ek-2 Tarihi"
+            type="date"
+            value={tempEmployeeForm.ek2Date}
+            onChange={(e) => setTempEmployeeForm((f) => ({ ...f, ek2Date: e.target.value }))}
+          />
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={tempEmployeeForm.ek2Suitable}
+              onChange={(e) => setTempEmployeeForm((f) => ({ ...f, ek2Suitable: e.target.checked }))}
+            />
+            Ek-2 formuna göre işe uygun
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <Input
+              label="İşyeri Hekimi Ad Soyad"
+              value={tempEmployeeForm.healthAuthorityDoctorName}
+              onChange={(e) => setTempEmployeeForm((f) => ({ ...f, healthAuthorityDoctorName: e.target.value }))}
+            />
+            <Input
+              label="İşyeri Hekimi Sertifika No"
+              value={tempEmployeeForm.healthAuthorityCertificateNo}
+              onChange={(e) => setTempEmployeeForm((f) => ({ ...f, healthAuthorityCertificateNo: e.target.value }))}
+            />
+          </div>
+          <Input
+            label="MYK Belge No"
+            value={tempEmployeeForm.mykCertificateNo}
+            onChange={(e) => setTempEmployeeForm((f) => ({ ...f, mykCertificateNo: e.target.value }))}
           />
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input

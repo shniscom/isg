@@ -77,6 +77,12 @@ export function EmployeeDetailPage() {
       sgkEntryDocExists: !!data.employee.sgkEntryDocExists,
       orientationTrainingDate: toDateInput(data.employee.orientationTrainingDate),
       ppeHandoverDocExists: !!data.employee.ppeHandoverDocExists,
+      ek2Suitable: !!data.employee.ek2Suitable,
+      ek2Date: toDateInput(data.employee.ek2Date),
+      healthAuthorityDoctorName: data.employee.healthAuthorityDoctorName || '',
+      healthAuthorityCertificateNo: data.employee.healthAuthorityCertificateNo || '',
+      isgTrainerName: data.employee.isgTrainerName || '',
+      isgTrainerCertificateNo: data.employee.isgTrainerCertificateNo || '',
     });
     setShowEdit(true);
   }
@@ -99,6 +105,12 @@ export function EmployeeDetailPage() {
         mykCertificateNo: editForm.mykCertificateNo.trim() || null,
         mykCertificateDate: editForm.mykCertificateDate || null,
         startDate: editForm.startDate || null,
+        ek2Suitable: editForm.ek2Suitable,
+        ek2Date: editForm.ek2Date || null,
+        healthAuthorityDoctorName: editForm.healthAuthorityDoctorName.trim() || null,
+        healthAuthorityCertificateNo: editForm.healthAuthorityCertificateNo.trim() || null,
+        isgTrainerName: editForm.isgTrainerName.trim() || null,
+        isgTrainerCertificateNo: editForm.isgTrainerCertificateNo.trim() || null,
       };
       if (isTemp) {
         payload.endDate = editForm.endDate || null;
@@ -272,21 +284,48 @@ export function EmployeeDetailPage() {
               <span className="text-slate-400">Oryantasyon Eğitimi:</span> {formatDate(employee.orientationTrainingDate)}
             </div>
           )}
+          {employee.ek2Date && (
+            <div>
+              <span className="text-slate-400">Ek-2 Tarihi:</span> {formatDate(employee.ek2Date)}
+            </div>
+          )}
+          {employee.healthAuthorityDoctorName && (
+            <div>
+              <span className="text-slate-400">İşyeri Hekimi:</span> {employee.healthAuthorityDoctorName}
+              {employee.healthAuthorityCertificateNo ? ` (Sertifika: ${employee.healthAuthorityCertificateNo})` : ''}
+            </div>
+          )}
+          {employee.isgTrainerName && (
+            <div>
+              <span className="text-slate-400">İSG Uzmanı:</span> {employee.isgTrainerName}
+              {employee.isgTrainerCertificateNo ? ` (Sertifika: ${employee.isgTrainerCertificateNo})` : ''}
+            </div>
+          )}
         </div>
 
-        {isTemp && (
-          <div className="flex flex-wrap gap-1.5 border-t border-slate-100 pt-2.5">
-            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${employee.assignmentFormExists ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-              {employee.assignmentFormExists ? '✓' : '✗'} Görevlendirme Formu
+        <div className="flex flex-wrap gap-1.5 border-t border-slate-100 pt-2.5">
+          {employee.medicalExamDate && (
+            <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">✓ Tetkik Yapıldı</span>
+          )}
+          {employee.ek2Date && (
+            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${employee.ek2Suitable ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+              {employee.ek2Suitable ? '✓' : '✗'} Ek-2 (İşe Uygunluk)
             </span>
-            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${employee.sgkEntryDocExists ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-              {employee.sgkEntryDocExists ? '✓' : '✗'} SGK Giriş Belgesi
-            </span>
-            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${employee.ppeHandoverDocExists ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-              {employee.ppeHandoverDocExists ? '✓' : '✗'} KKD Zimmet Tutanağı
-            </span>
-          </div>
-        )}
+          )}
+          {isTemp && (
+            <>
+              <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${employee.assignmentFormExists ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                {employee.assignmentFormExists ? '✓' : '✗'} Görevlendirme Formu
+              </span>
+              <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${employee.sgkEntryDocExists ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                {employee.sgkEntryDocExists ? '✓' : '✗'} SGK Giriş Belgesi
+              </span>
+              <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${employee.ppeHandoverDocExists ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                {employee.ppeHandoverDocExists ? '✓' : '✗'} KKD Zimmet Tutanağı
+              </span>
+            </>
+          )}
+        </div>
 
         {canManage && (
           <div className="flex flex-wrap gap-2 pt-1">
@@ -370,6 +409,40 @@ export function EmployeeDetailPage() {
               type="date"
               value={editForm.mykCertificateDate}
               onChange={(e) => setEditForm((f) => ({ ...f, mykCertificateDate: e.target.value }))}
+            />
+            <Input
+              label="Ek-2 Tarihi"
+              type="date"
+              value={editForm.ek2Date}
+              onChange={(e) => setEditForm((f) => ({ ...f, ek2Date: e.target.value }))}
+            />
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={editForm.ek2Suitable}
+                onChange={(e) => setEditForm((f) => ({ ...f, ek2Suitable: e.target.checked }))}
+              />
+              Ek-2 formuna göre işe uygun
+            </label>
+            <Input
+              label="İşyeri Hekimi Ad Soyad"
+              value={editForm.healthAuthorityDoctorName}
+              onChange={(e) => setEditForm((f) => ({ ...f, healthAuthorityDoctorName: e.target.value }))}
+            />
+            <Input
+              label="İşyeri Hekimi Sertifika No"
+              value={editForm.healthAuthorityCertificateNo}
+              onChange={(e) => setEditForm((f) => ({ ...f, healthAuthorityCertificateNo: e.target.value }))}
+            />
+            <Input
+              label="İSG Uzmanı Ad Soyad"
+              value={editForm.isgTrainerName}
+              onChange={(e) => setEditForm((f) => ({ ...f, isgTrainerName: e.target.value }))}
+            />
+            <Input
+              label="İSG Uzmanı Sertifika No"
+              value={editForm.isgTrainerCertificateNo}
+              onChange={(e) => setEditForm((f) => ({ ...f, isgTrainerCertificateNo: e.target.value }))}
             />
             {isTemp && (
               <div className="space-y-2.5 rounded-lg border border-amber-200 bg-amber-50 p-2.5">
