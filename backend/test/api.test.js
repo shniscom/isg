@@ -1797,7 +1797,7 @@ test('çalışanlar: sayfalama - page/pageSize verilince sayfa sayfa döner, ver
   assert.equal(new Set(allNames).size, 5);
 });
 
-test('çalışanlar: filtre sekmeleri (myk/untrained/medicalExam/isgRole) ve /employees/stats sayıları', async () => {
+test('çalışanlar: çoklu seçmeli filtreler (noMyk/noMedicalExam/noTraining/trainingExpired/hasIsgRole) ve /employees/stats sayıları', async () => {
   const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Filtre Test Projesi', code: 'TST-EMPFILTER-001' } });
   const projectId = proj.body.project.id;
   const company = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Filtre Firması', type: 'TASERON' } });
@@ -1833,28 +1833,44 @@ test('çalışanlar: filtre sekmeleri (myk/untrained/medicalExam/isgRole) ve /em
       isgRole: 'İSG Uzmanı',
     },
   });
+  const empD = await api('POST', '/employees', {
+    token: adminToken,
+    body: {
+      projectId,
+      companyId,
+      fullName: 'Eğitim Süresi Dolmuş Çalışan',
+      isgTrainingDate: '2020-01-01',
+      isgTrainingExpiryDate: '2021-01-01',
+    },
+  });
   assert.equal(empA.status, 201);
   assert.equal(empB.status, 201);
   assert.equal(empC.status, 201);
+  assert.equal(empD.status, 201);
 
   const stats = await api('GET', `/employees/stats?projectId=${projectId}&companyId=${companyId}`, { token: adminToken });
-  assert.equal(stats.body.total, 3);
-  assert.equal(stats.body.myk, 1);
-  assert.equal(stats.body.untrained, 1);
-  assert.equal(stats.body.medicalExam, 1);
-  assert.equal(stats.body.isgRole, 1);
+  assert.equal(stats.body.total, 4);
+  assert.equal(stats.body.noMyk, 3); // B, C, D
+  assert.equal(stats.body.noMedicalExam, 3); // A, C, D
+  assert.equal(stats.body.noTraining, 1); // B
+  assert.equal(stats.body.trainingExpired, 1); // D
+  assert.equal(stats.body.hasIsgRole, 1); // C
 
-  const mykList = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&filter=myk`, { token: adminToken });
-  assert.deepEqual(mykList.body.employees.map((e) => e.fullName), ['MYK Sahibi Çalışan']);
+  const noTrainingList = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&filters=noTraining`, { token: adminToken });
+  assert.deepEqual(noTrainingList.body.employees.map((e) => e.fullName), ['Eğitimsiz Tetkikli Çalışan']);
 
-  const untrainedList = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&filter=untrained`, { token: adminToken });
-  assert.deepEqual(untrainedList.body.employees.map((e) => e.fullName), ['Eğitimsiz Tetkikli Çalışan']);
+  const expiredList = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&filters=trainingExpired`, { token: adminToken });
+  assert.deepEqual(expiredList.body.employees.map((e) => e.fullName), ['Eğitim Süresi Dolmuş Çalışan']);
 
-  const medicalList = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&filter=medicalExam`, { token: adminToken });
-  assert.deepEqual(medicalList.body.employees.map((e) => e.fullName), ['Eğitimsiz Tetkikli Çalışan']);
-
-  const isgRoleList = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&filter=isgRole`, { token: adminToken });
+  const isgRoleList = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&filters=hasIsgRole`, { token: adminToken });
   assert.deepEqual(isgRoleList.body.employees.map((e) => e.fullName), ['İSG Görevli Çalışan']);
+
+  // Çoklu seçim (OR): "eğitimsiz" VEYA "İSG görevli" olanlar birlikte gelmeli.
+  const combined = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&filters=noTraining,hasIsgRole`, { token: adminToken });
+  assert.deepEqual(
+    combined.body.employees.map((e) => e.fullName).sort(),
+    ['Eğitimsiz Tetkikli Çalışan', 'İSG Görevli Çalışan'].sort()
+  );
 });
 
 test('atanabilir kişiler: bölge (blok) ataması ve firma+genel/tüm kullanıcı filtreleri', async () => {
@@ -3458,4 +3474,209 @@ test('geçici görevlendirme: admin doğrudan (onaysız) temp firma/çalışan o
   const found = list.body.companies.find((c) => c.id === tempCompanyId);
   assert.ok(found);
   assert.equal(found.isTemporaryAssignment, true);
+});
+
+test('çalışanlar: gelecek tarihli bitiş/çıkış tarihi çalışanı hemen arşivlemez, geçmiş/bugünkü tarih arşivler', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Bitiş Tarihi Testi Projesi', code: 'TST-037' } });
+  const projectId = proj.body.project.id;
+  const company = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Bitiş Tarihi Test Firması', type: 'TASERON' } });
+  const companyId = company.body.company.id;
+
+  const future = new Date();
+  future.setDate(future.getDate() + 10);
+  const futureStr = future.toISOString().slice(0, 10);
+
+  // 1) Oluştururken gelecek tarihli bir "görev bitiş tarihi" girilirse çalışan AKTİF kalmalı.
+  const createFuture = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId, fullName: 'Gelecek Bitişli Çalışan', nationalId: '99999999901', position: 'Elektrikçi', startDate: '2026-01-01', endDate: futureStr },
+  });
+  assert.equal(createFuture.status, 201);
+  assert.equal(createFuture.body.employee.isActive, true);
+  assert.equal(createFuture.body.employee.lastExitDate, null);
+
+  // 2) Geçmiş bir tarihle oluşturulursa (gerçek geçmiş çıkış girişi) hâlâ hemen arşivlenmeli.
+  const createPast = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId, fullName: 'Geçmiş Çıkışlı Çalışan', nationalId: '99999999902', position: 'Usta', startDate: '2024-01-01', endDate: '2024-06-01' },
+  });
+  assert.equal(createPast.status, 201);
+  assert.equal(createPast.body.employee.isActive, false);
+  assert.ok(createPast.body.employee.lastExitDate);
+
+  // 3) Aktif bir çalışana PATCH ile gelecek tarihli bitiş tarihi girilirse yine aktif kalmalı.
+  const activeEmp = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId, fullName: 'Patch İle Test Çalışanı', nationalId: '99999999903', position: 'Formen', startDate: '2026-01-01' },
+  });
+  const patchFuture = await api('PATCH', `/employees/${activeEmp.body.employee.id}`, { token: adminToken, body: { endDate: futureStr } });
+  assert.equal(patchFuture.status, 200);
+  assert.equal(patchFuture.body.employee.isActive, true);
+
+  // 4) Aynı çalışana geçmiş/bugünkü bir tarih girilirse arşivlenmeli.
+  const today = new Date().toISOString().slice(0, 10);
+  const patchToday = await api('PATCH', `/employees/${activeEmp.body.employee.id}`, { token: adminToken, body: { endDate: today } });
+  assert.equal(patchToday.status, 200);
+  assert.equal(patchToday.body.employee.isActive, false);
+  assert.ok(patchToday.body.employee.lastExitDate);
+});
+
+test('zamanlayıcı: geçici görevlendirme bitiş uyarısı (5 gün kala) + bitince otomatik arşivleme ve bildirim', async () => {
+  const { eq } = require('drizzle-orm');
+  const { checkTempAssignmentEndingReminders, checkTempAssignmentEndedAndArchive } = require('../src/services/scheduler.service');
+
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Zamanlayıcı Geçici Görev Projesi', code: 'TST-038' } });
+  const projectId = proj.body.project.id;
+  const company = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Zamanlayıcı Geçici Firma', isTemporaryAssignment: true } });
+  const companyId = company.body.company.id;
+
+  const in3Days = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+  const create = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId, fullName: 'Zamanlayıcı Geçici Çalışan', nationalId: '99999999911', position: 'Kaynakçı', startDate: '2026-01-01', endDate: in3Days },
+  });
+  assert.equal(create.status, 201);
+  assert.equal(create.body.employee.isActive, true); // bug fix: gelecek tarih hemen arşivlemiyor
+  const empId = create.body.employee.id;
+
+  await checkTempAssignmentEndingReminders();
+  const notifs1 = await api('GET', '/notifications', { token: adminToken });
+  assert.ok(notifs1.body.notifications.some((n) => n.title === 'Geçici görevlendirme bitiyor' && n.message.includes('Zamanlayıcı Geçici Çalışan')));
+
+  // Tekrar çalıştırıldığında ikinci kez bildirim gitmemeli.
+  await checkTempAssignmentEndingReminders();
+  const notifs2 = await api('GET', '/notifications', { token: adminToken });
+  const reminderCount = notifs2.body.notifications.filter((n) => n.title === 'Geçici görevlendirme bitiyor' && n.message.includes('Zamanlayıcı Geçici Çalışan')).length;
+  assert.equal(reminderCount, 1);
+
+  // Bitiş tarihi henüz gelmediği için otomatik arşivleme çalışmamalı.
+  await checkTempAssignmentEndedAndArchive();
+  const stillActive = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&status=all`, { token: adminToken });
+  assert.equal(stillActive.body.employees.find((e) => e.id === empId).isActive, true);
+
+  // Bitiş tarihini geçmişe alıp tekrar çalıştırınca otomatik arşivlenmeli + "bitti" bildirimi gitmeli.
+  await db.update(schema.employees).set({ endDate: new Date(Date.now() - 86400000) }).where(eq(schema.employees.id, empId));
+  await checkTempAssignmentEndedAndArchive();
+  const afterArchive = await api('GET', `/employees?projectId=${projectId}&companyId=${companyId}&status=all`, { token: adminToken });
+  const archivedEmp = afterArchive.body.employees.find((e) => e.id === empId);
+  assert.equal(archivedEmp.isActive, false);
+  assert.ok(archivedEmp.lastExitDate);
+
+  const notifs3 = await api('GET', '/notifications', { token: adminToken });
+  assert.ok(notifs3.body.notifications.some((n) => n.title === 'Geçici görevlendirme bitti' && n.message.includes('Zamanlayıcı Geçici Çalışan')));
+});
+
+test('zamanlayıcı: İSG eğitim geçerlilik süresi 7 gün kala admin\'e uyarı gönderir, ikinci kez tekrar göndermez', async () => {
+  const { checkTrainingExpiryReminders } = require('../src/services/scheduler.service');
+
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Zamanlayıcı Eğitim Projesi', code: 'TST-039' } });
+  const projectId = proj.body.project.id;
+  const company = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Zamanlayıcı Eğitim Firması', type: 'TASERON' } });
+  const companyId = company.body.company.id;
+
+  const in5Days = new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10);
+  const create = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId, fullName: 'Eğitimi Bitecek Çalışan', nationalId: '99999999912', position: 'Usta', startDate: '2024-01-01', isgTrainingDate: '2024-01-01', isgTrainingExpiryDate: in5Days },
+  });
+  assert.equal(create.status, 201);
+
+  await checkTrainingExpiryReminders();
+  const notifs1 = await api('GET', '/notifications', { token: adminToken });
+  assert.ok(notifs1.body.notifications.some((n) => n.title === 'İSG eğitim geçerlilik süresi doluyor' && n.message.includes('Eğitimi Bitecek Çalışan')));
+
+  await checkTrainingExpiryReminders();
+  const notifs2 = await api('GET', '/notifications', { token: adminToken });
+  const count = notifs2.body.notifications.filter((n) => n.title === 'İSG eğitim geçerlilik süresi doluyor' && n.message.includes('Eğitimi Bitecek Çalışan')).length;
+  assert.equal(count, 1);
+});
+
+test('zamanlayıcı: tetkik/Ek-2 süresi tehlike sınıfına göre hesaplanıp 7 gün kala uyarı verir; tehlike sınıfı boşsa uyarı verilmez', async () => {
+  const { eq } = require('drizzle-orm');
+  const { checkHealthExamExpiryReminders } = require('../src/services/scheduler.service');
+
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Zamanlayıcı Tetkik Projesi', code: 'TST-040' } });
+  const projectId = proj.body.project.id;
+
+  // Çok tehlikeli sınıf -> 1 yıl geçerlilik. Tetkik tarihini "1 yıl - 5 gün" öncesine ayarlayarak
+  // hesaplanan bitiş tarihinin 5 gün sonrasına (7 günlük uyarı penceresi içine) düşmesini sağlıyoruz.
+  const dangerousCompany = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Çok Tehlikeli Firma', type: 'TASERON', dangerClass: 'COK_TEHLIKELI' } });
+  const dangerousCompanyId = dangerousCompany.body.company.id;
+  const emp = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId: dangerousCompanyId, fullName: 'Tetkik Süresi Dolan Çalışan', nationalId: '99999999913', position: 'Kaynakçı', startDate: '2024-01-01' },
+  });
+  const empId = emp.body.employee.id;
+  const almostOneYearAgo = new Date();
+  almostOneYearAgo.setFullYear(almostOneYearAgo.getFullYear() - 1);
+  almostOneYearAgo.setDate(almostOneYearAgo.getDate() + 5);
+  await db.update(schema.employees).set({ medicalExamDate: almostOneYearAgo, ek2Date: almostOneYearAgo, ek2Suitable: true }).where(eq(schema.employees.id, empId));
+
+  // Tehlike sınıfı tanımsız firmadaki çalışan için (aynı şartlarda) uyarı üretilmemeli.
+  const noClassCompany = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Sınıfsız Firma', type: 'TASERON' } });
+  const noClassEmp = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId: noClassCompany.body.company.id, fullName: 'Sınıfsız Firma Çalışanı', nationalId: '99999999914', position: 'Usta', startDate: '2024-01-01' },
+  });
+  await db.update(schema.employees).set({ medicalExamDate: almostOneYearAgo }).where(eq(schema.employees.id, noClassEmp.body.employee.id));
+
+  await checkHealthExamExpiryReminders();
+
+  const notifs = await api('GET', '/notifications', { token: adminToken });
+  assert.ok(notifs.body.notifications.some((n) => n.title === 'Periyodik tetkik süresi doluyor' && n.message.includes('Tetkik Süresi Dolan Çalışan')));
+  assert.ok(notifs.body.notifications.some((n) => n.title === 'Ek-2 (periyodik muayene formu) süresi doluyor' && n.message.includes('Tetkik Süresi Dolan Çalışan')));
+  assert.ok(!notifs.body.notifications.some((n) => n.message.includes('Sınıfsız Firma Çalışanı')));
+
+  // İkinci çalıştırmada tekrar göndermemeli.
+  await checkHealthExamExpiryReminders();
+  const notifsAfter = await api('GET', '/notifications', { token: adminToken });
+  const tetkikCount = notifsAfter.body.notifications.filter((n) => n.title === 'Periyodik tetkik süresi doluyor' && n.message.includes('Tetkik Süresi Dolan Çalışan')).length;
+  assert.equal(tetkikCount, 1);
+});
+
+test('çalışanlar: yeni sağlık/eğitim alanları (Ek-2, işyeri hekimi, İSG uzmanı) kaydedilip düzenlenebiliyor', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Sağlık Alanları Test Projesi', code: 'TST-041' } });
+  const projectId = proj.body.project.id;
+  const company = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Sağlık Alanları Test Firması', type: 'TASERON' } });
+  const companyId = company.body.company.id;
+
+  const create = await api('POST', '/employees', {
+    token: adminToken,
+    body: {
+      projectId,
+      companyId,
+      fullName: 'Sağlık Alanları Çalışanı',
+      nationalId: '99999999921',
+      position: 'Kaynakçı',
+      startDate: '2026-01-01',
+      medicalExamDate: '2026-01-05',
+      ek2Suitable: true,
+      ek2Date: '2026-01-06',
+      healthAuthorityDoctorName: 'Dr. Ayşe Yılmaz',
+      healthAuthorityCertificateNo: 'IH-12345',
+      isgTrainingDate: '2026-01-07',
+      isgTrainingExpiryDate: '2028-01-07',
+      isgTrainerName: 'Mehmet Demir',
+      isgTrainerCertificateNo: 'IG-67890',
+      mykCertificateNo: 'MYK-11223',
+    },
+  });
+  assert.equal(create.status, 201);
+  const emp = create.body.employee;
+  assert.equal(emp.ek2Suitable, true);
+  assert.ok(emp.ek2Date);
+  assert.equal(emp.healthAuthorityDoctorName, 'Dr. Ayşe Yılmaz');
+  assert.equal(emp.healthAuthorityCertificateNo, 'IH-12345');
+  assert.equal(emp.isgTrainerName, 'Mehmet Demir');
+  assert.equal(emp.isgTrainerCertificateNo, 'IG-67890');
+
+  const patch = await api('PATCH', `/employees/${emp.id}`, {
+    token: adminToken,
+    body: { ek2Suitable: false, healthAuthorityDoctorName: 'Dr. Ali Kaya' },
+  });
+  assert.equal(patch.status, 200);
+  assert.equal(patch.body.employee.ek2Suitable, false);
+  assert.equal(patch.body.employee.healthAuthorityDoctorName, 'Dr. Ali Kaya');
+  // Diğer alanlar dokunulmadıkça korunmalı (partial update).
+  assert.equal(patch.body.employee.isgTrainerName, 'Mehmet Demir');
 });

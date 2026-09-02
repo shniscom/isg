@@ -127,6 +127,13 @@
       "when": 1788206036040,
       "tag": "0017_temporary_assignment_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1788339916784,
+      "tag": "0018_employee_health_training_fields",
+      "breakpoints": true
     }
   ]
 }

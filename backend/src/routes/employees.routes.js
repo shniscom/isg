@@ -1,6 +1,6 @@
 const express = require('express');
 const { z } = require('zod');
-const { eq, and, or, count, ilike, inArray, desc, asc, isNull, isNotNull, ne, sql } = require('drizzle-orm');
+const { eq, and, or, count, ilike, inArray, desc, asc, isNull, isNotNull, ne, lt, sql } = require('drizzle-orm');
 const { db } = require('../db/client');
 const { employees, nonconformities, companies, userProjects, incidents } = require('../db/schema');
 const { requireAuth } = require('../middleware/auth');
@@ -28,6 +28,23 @@ function toDateOrNull(value) {
   if (!value) return null;
   const d = new Date(value);
   return isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Verilen tarih bugüne eşit veya geçmişte mi? Çıkış/görev bitiş tarihi girilirken çalışanın
+ * HEMEN arşivlenip arşivlenmeyeceğine karar vermek için kullanılır: geçmiş/bugünkü bir tarih
+ * "zaten gerçekleşmiş bir çıkış" sayılır ve anında arşivler, ama GELECEK bir tarih (örn. geçici
+ * görevlendirmede henüz bitmemiş bir "görev bitiş tarihi") çalışanı aktif bırakmalı - o tarih
+ * gelene kadar hâlâ sahada/görevde demektir. Gelecek tarihli çıkışların otomatik arşivlenmesi,
+ * services/scheduledJobs.service.js içindeki günlük kontrolle yapılır (bkz. o dosya).
+ */
+function isPastOrToday(value) {
+  if (!value) return false;
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return false;
+  const endOfToday = new Date();
+  endOfToday.setHours(23, 59, 59, 999);
+  return d <= endOfToday;
 }
 
 function hasPermission(req, key) {
@@ -122,6 +139,31 @@ router.get(
   })
 );
 
+/**
+ * Çalışanlar sekmesindeki "Filtrele" menüsündeki her bir çoklu seçmeli filtre için karşılık
+ * gelen SQL koşulu. GET / ve GET /stats aynı anahtar kümesini paylaşır (bkz. FILTER_CONDITIONS
+ * kullanımı) - birden fazla filtre birlikte seçilirse OR ile birleştirilir (ör. "MYK'sı VEYA
+ * tetkiki olmayanlar").
+ */
+const FILTER_CONDITIONS = {
+  noMyk: () => or(isNull(employees.mykCertificateNo), eq(employees.mykCertificateNo, '')),
+  noMedicalExam: () => isNull(employees.medicalExamDate),
+  noTraining: () => isNull(employees.isgTrainingDate),
+  trainingExpired: () => and(isNotNull(employees.isgTrainingExpiryDate), lt(employees.isgTrainingExpiryDate, new Date())),
+  hasIsgRole: () => and(isNotNull(employees.isgRole), ne(employees.isgRole, '')),
+};
+
+/** ?filters=noMyk,noTraining gibi virgülle ayrılmış bir query param'ı OR koşuluna çevirir. */
+function buildFilterCondition(rawFilters) {
+  if (!rawFilters) return null;
+  const keys = String(rawFilters)
+    .split(',')
+    .map((k) => k.trim())
+    .filter((k) => FILTER_CONDITIONS[k]);
+  if (keys.length === 0) return null;
+  return or(...keys.map((k) => FILTER_CONDITIONS[k]()));
+}
+
 const SORTABLE_COLUMNS = {
   fullName: employees.fullName,
   startDate: employees.startDate,
@@ -166,7 +208,7 @@ router.get(
     const conditions = [eq(employees.projectId, projectId)];
     if (companyFilterIds) {
       if (companyFilterIds.length === 0) {
-        return res.json({ total: 0, myk: 0, untrained: 0, medicalExam: 0, isgRole: 0 });
+        return res.json({ total: 0, noMyk: 0, noMedicalExam: 0, noTraining: 0, trainingExpired: 0, hasIsgRole: 0 });
       }
       conditions.push(or(...companyFilterIds.map((id) => eq(employees.companyId, id))));
     }
@@ -183,10 +225,11 @@ router.get(
     const [row] = await db
       .select({
         total: count(),
-        myk: sql`count(*) filter (where ${employees.mykCertificateNo} is not null and ${employees.mykCertificateNo} <> '')`.mapWith(Number),
-        untrained: sql`count(*) filter (where ${employees.isgTrainingDate} is null)`.mapWith(Number),
-        medicalExam: sql`count(*) filter (where ${employees.medicalExamDate} is not null)`.mapWith(Number),
-        isgRole: sql`count(*) filter (where ${employees.isgRole} is not null and ${employees.isgRole} <> '')`.mapWith(Number),
+        noMyk: sql`count(*) filter (where ${employees.mykCertificateNo} is null or ${employees.mykCertificateNo} = '')`.mapWith(Number),
+        noMedicalExam: sql`count(*) filter (where ${employees.medicalExamDate} is null)`.mapWith(Number),
+        noTraining: sql`count(*) filter (where ${employees.isgTrainingDate} is null)`.mapWith(Number),
+        trainingExpired: sql`count(*) filter (where ${employees.isgTrainingExpiryDate} is not null and ${employees.isgTrainingExpiryDate} < now())`.mapWith(Number),
+        hasIsgRole: sql`count(*) filter (where ${employees.isgRole} is not null and ${employees.isgRole} <> '')`.mapWith(Number),
       })
       .from(employees)
       .leftJoin(companies, eq(employees.companyId, companies.id))
@@ -267,17 +310,10 @@ router.get(
       conditions.push(or(ilike(employees.fullName, `%${searchTerm}%`), ilike(employees.nationalId, `%${searchTerm}%`)));
     }
 
-    // Filtre sekmeleri: tümü (varsayılan) | myk | untrained (eğitimsiz) | medicalExam (tetkik) | isgRole (İSG görevi)
-    const filter = req.query.filter;
-    if (filter === 'myk') {
-      conditions.push(and(isNotNull(employees.mykCertificateNo), ne(employees.mykCertificateNo, '')));
-    } else if (filter === 'untrained') {
-      conditions.push(isNull(employees.isgTrainingDate));
-    } else if (filter === 'medicalExam') {
-      conditions.push(isNotNull(employees.medicalExamDate));
-    } else if (filter === 'isgRole') {
-      conditions.push(and(isNotNull(employees.isgRole), ne(employees.isgRole, '')));
-    }
+    // Çoklu seçmeli filtreler (bkz. FILTER_CONDITIONS): ?filters=noMyk,noTraining gibi
+    // virgülle ayrılmış anahtarlar OR ile birleştirilir.
+    const filterCondition = buildFilterCondition(req.query.filters);
+    if (filterCondition) conditions.push(filterCondition);
 
     const sortColumn = SORTABLE_COLUMNS[req.query.sortBy] || employees.fullName;
     const sortDir = req.query.sortDir === 'desc' ? desc : req.query.sortDir === 'asc' ? asc : req.query.sortBy === 'startDate' ? desc : asc;
@@ -377,6 +413,13 @@ const createSchema = z.object({
   sgkEntryDocExists: z.boolean().optional(),
   orientationTrainingDate: z.string().optional().nullable().or(z.literal('')),
   ppeHandoverDocExists: z.boolean().optional(),
+  // Sağlık/eğitim yapılandırılmış alanları (herhangi bir çalışan için geçerli, temp'e özel değil).
+  ek2Suitable: z.boolean().optional(),
+  ek2Date: z.string().optional().nullable().or(z.literal('')),
+  healthAuthorityDoctorName: z.string().optional().nullable().or(z.literal('')),
+  healthAuthorityCertificateNo: z.string().optional().nullable().or(z.literal('')),
+  isgTrainerName: z.string().optional().nullable().or(z.literal('')),
+  isgTrainerCertificateNo: z.string().optional().nullable().or(z.literal('')),
 });
 
 router.post(
@@ -444,15 +487,24 @@ router.post(
       mykCertificateDate: toDateOrNull(parsed.data.mykCertificateDate),
       startDate: toDateOrNull(parsed.data.startDate),
       endDate: toDateOrNull(endDate),
-      isActive: !endDate,
-      // İlk kayıt: "ilk giriş tarihi" burada bir kere sabitlenir. Zaten çıkışlı (endDate dolu)
-      // olarak ekleniyorsa (nadir - genelde geçmiş kayıt girişi) en son çıkış tarihi de aynı anda set edilir.
+      // Yalnızca geçmiş/bugünkü bir çıkış tarihi çalışanı hemen arşivler; gelecek tarihli bir
+      // (görev) bitiş tarihi çalışanı aktif bırakır - bkz. isPastOrToday yorumu.
+      isActive: !(endDate && isPastOrToday(endDate)),
+      // İlk kayıt: "ilk giriş tarihi" burada bir kere sabitlenir. Zaten çıkışlı (endDate dolu ve
+      // geçmiş/bugünkü) olarak ekleniyorsa (nadir - genelde geçmiş kayıt girişi) en son çıkış
+      // tarihi de aynı anda set edilir.
       firstStartDate: toDateOrNull(parsed.data.startDate),
-      lastExitDate: endDate ? toDateOrNull(endDate) : null,
+      lastExitDate: endDate && isPastOrToday(endDate) ? toDateOrNull(endDate) : null,
       assignmentFormExists: parsed.data.assignmentFormExists ?? false,
       sgkEntryDocExists: parsed.data.sgkEntryDocExists ?? false,
       orientationTrainingDate: toDateOrNull(parsed.data.orientationTrainingDate),
       ppeHandoverDocExists: parsed.data.ppeHandoverDocExists ?? false,
+      ek2Suitable: parsed.data.ek2Suitable ?? false,
+      ek2Date: toDateOrNull(parsed.data.ek2Date),
+      healthAuthorityDoctorName: parsed.data.healthAuthorityDoctorName || null,
+      healthAuthorityCertificateNo: parsed.data.healthAuthorityCertificateNo || null,
+      isgTrainerName: parsed.data.isgTrainerName || null,
+      isgTrainerCertificateNo: parsed.data.isgTrainerCertificateNo || null,
     };
 
     if (isTemp) {
@@ -507,6 +559,12 @@ const updateSchema = z.object({
   sgkEntryDocExists: z.boolean().optional(),
   orientationTrainingDate: z.string().optional().nullable().or(z.literal('')),
   ppeHandoverDocExists: z.boolean().optional(),
+  ek2Suitable: z.boolean().optional(),
+  ek2Date: z.string().optional().nullable().or(z.literal('')),
+  healthAuthorityDoctorName: z.string().optional().nullable().or(z.literal('')),
+  healthAuthorityCertificateNo: z.string().optional().nullable().or(z.literal('')),
+  isgTrainerName: z.string().optional().nullable().or(z.literal('')),
+  isgTrainerCertificateNo: z.string().optional().nullable().or(z.literal('')),
 });
 
 router.patch(
@@ -554,8 +612,14 @@ router.patch(
     if (parsed.data.nationalId !== undefined) values.nationalId = parsed.data.nationalId || null;
     if (parsed.data.position !== undefined) values.position = parsed.data.position || null;
     if (parsed.data.isgTrainingDate !== undefined) values.isgTrainingDate = toDateOrNull(parsed.data.isgTrainingDate);
-    if (parsed.data.isgTrainingExpiryDate !== undefined) values.isgTrainingExpiryDate = toDateOrNull(parsed.data.isgTrainingExpiryDate);
-    if (parsed.data.medicalExamDate !== undefined) values.medicalExamDate = toDateOrNull(parsed.data.medicalExamDate);
+    if (parsed.data.isgTrainingExpiryDate !== undefined) {
+      values.isgTrainingExpiryDate = toDateOrNull(parsed.data.isgTrainingExpiryDate);
+      values.trainingExpiryReminderSentAt = null; // tarih değiştiyse süre dolum uyarısı yeniden hesaplanabilsin
+    }
+    if (parsed.data.medicalExamDate !== undefined) {
+      values.medicalExamDate = toDateOrNull(parsed.data.medicalExamDate);
+      values.medicalExamExpiryReminderSentAt = null;
+    }
     if (parsed.data.startWorkTrainingNote !== undefined) values.startWorkTrainingNote = parsed.data.startWorkTrainingNote || null;
     if (parsed.data.ek2Note !== undefined) values.ek2Note = parsed.data.ek2Note || null;
     if (parsed.data.healthAuthoritySignatureNote !== undefined) values.healthAuthoritySignatureNote = parsed.data.healthAuthoritySignatureNote || null;
@@ -567,16 +631,31 @@ router.patch(
     if (parsed.data.sgkEntryDocExists !== undefined) values.sgkEntryDocExists = parsed.data.sgkEntryDocExists;
     if (parsed.data.orientationTrainingDate !== undefined) values.orientationTrainingDate = toDateOrNull(parsed.data.orientationTrainingDate);
     if (parsed.data.ppeHandoverDocExists !== undefined) values.ppeHandoverDocExists = parsed.data.ppeHandoverDocExists;
+    if (parsed.data.ek2Suitable !== undefined) values.ek2Suitable = parsed.data.ek2Suitable;
+    if (parsed.data.ek2Date !== undefined) {
+      values.ek2Date = toDateOrNull(parsed.data.ek2Date);
+      values.ek2ExpiryReminderSentAt = null;
+    }
+    if (parsed.data.healthAuthorityDoctorName !== undefined) values.healthAuthorityDoctorName = parsed.data.healthAuthorityDoctorName || null;
+    if (parsed.data.healthAuthorityCertificateNo !== undefined) values.healthAuthorityCertificateNo = parsed.data.healthAuthorityCertificateNo || null;
+    if (parsed.data.isgTrainerName !== undefined) values.isgTrainerName = parsed.data.isgTrainerName || null;
+    if (parsed.data.isgTrainerCertificateNo !== undefined) values.isgTrainerCertificateNo = parsed.data.isgTrainerCertificateNo || null;
     if (parsed.data.endDate !== undefined) {
       const endDateRaw = parsed.data.endDate || null;
-      // Çıkış tarihi girilirse çalışan otomatik arşive alınır; temizlenirse yeniden aktif olur.
-      values.isActive = !endDateRaw;
+      // Yalnızca geçmiş/bugünkü bir çıkış tarihi çalışanı otomatik arşive alır; gelecek tarihli
+      // bir (görev) bitiş tarihi girildiğinde çalışan hâlâ aktif kalır - o tarih gelince
+      // scheduledJobs.service.js içindeki günlük kontrol otomatik arşivler (bkz. isPastOrToday).
+      const endDateReached = endDateRaw && isPastOrToday(endDateRaw);
+      values.isActive = !endDateReached;
       values.endDate = toDateOrNull(endDateRaw);
-      if (endDateRaw) {
+      // Bitiş tarihi değiştiyse (ör. görevlendirme uzatıldıysa) "bitiyor" uyarısı yeniden
+      // tetiklenebilsin diye daha önce gönderilmiş işareti sıfırlanır.
+      values.tempAssignmentEndingReminderSentAt = null;
+      if (endDateReached) {
         // Arşivleniyor: en son çıkış tarihini kalıcı olarak sakla (bkz. schema.js employees.lastExitDate
         // yorumu) - bu değer, çalışan sonradan yeniden aktif edilip endDate temizlense bile kaybolmaz.
         values.lastExitDate = values.endDate;
-      } else if (employee.isActive === false) {
+      } else if (!endDateRaw && employee.isActive === false) {
         // Yeniden aktif ediliyor (daha önce arşivdeydi) - bu "yeniden giriş" anıdır. lastExitDate
         // bilinçli olarak DOKUNULMADAN bırakılır (geçmiş çıkış bilgisi kaybolmasın diye); startDate
         // zaten yukarıda (girildiyse) güncellenmiş olur ve "yeniden giriş tarihi" olarak gösterilir.

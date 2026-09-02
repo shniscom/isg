@@ -1,12 +1,39 @@
-const { eq, and, isNull, inArray } = require('drizzle-orm');
+const { eq, and, isNull, isNotNull, inArray } = require('drizzle-orm');
 const { db } = require('../db/client');
-const { nonconformities, archives, projects, users, notifications } = require('../db/schema');
+const { nonconformities, archives, projects, users, notifications, employees, companies } = require('../db/schema');
 const { createNotification, createNotifications } = require('./notification.service');
 const { loadAssigneeIdsFor } = require('./nonconformity.service');
 const { findNonconformityIdsForPeriod, previousMonthLabel } = require('./archive.service');
 
 const CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 dakikada bir kontrol eder
 const ARCHIVE_REMINDER_TITLE = 'Aylık arşivleme hatırlatması';
+const TEMP_ASSIGNMENT_ENDING_DAYS = 5; // geçici görevlendirme bitiş uyarısı: kaç gün kala
+const EXPIRY_REMINDER_DAYS = 7; // eğitim/tetkik/Ek-2 süresi dolma uyarısı: kaç gün kala
+
+/**
+ * Tehlike sınıfına göre periyodik sağlık muayenesi (tetkik / Ek-2) geçerlilik süresi (yıl).
+ * 6331 sayılı Kanun ve İşyeri Hekimi ve Diğer Sağlık Personelinin Görev, Yetki, Sorumluluk ve
+ * Eğitimleri Hakkında Yönetmelik Ek-2 uyarınca: az tehlikeli işyerlerinde en geç 5 yılda, tehlikeli
+ * işyerlerinde en geç 3 yılda, çok tehlikeli işyerlerinde en geç yılda bir tekrarlanır. Tehlike
+ * sınıfı tanımlı değilse (firma kaydında dangerClass boşsa) süre hesaplanamaz - null döner ve
+ * ilgili çalışan için bildirim üretilmez (yanlış/erken uyarı vermemek için).
+ */
+function healthExamValidityYears(dangerClass) {
+  if (dangerClass === 'COK_TEHLIKELI') return 1;
+  if (dangerClass === 'TEHLIKELI') return 3;
+  if (dangerClass === 'AZ_TEHLIKELI') return 5;
+  return null;
+}
+
+function addYears(date, years) {
+  const d = new Date(date);
+  d.setFullYear(d.getFullYear() + years);
+  return d;
+}
+
+function daysBetween(from, to) {
+  return (new Date(to).getTime() - new Date(from).getTime()) / (24 * 60 * 60 * 1000);
+}
 
 /**
  * Termin süresinin 2/3'ü dolmuş ama henüz kapatılmamış ve daha önce uyarı gönderilmemiş
@@ -147,15 +174,199 @@ async function checkArchiveReminders() {
   }
 }
 
+/** Sistem adminlerine (aktif) bildirim gönderir - geçici görevlendirme/süre dolum uyarıları için ortak yardımcı. */
+async function notifyAdmins({ title, message }) {
+  const admins = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.isSystemAdmin, true), eq(users.isActive, true)));
+  if (admins.length === 0) return;
+  await createNotifications(null, { userIds: admins.map((a) => a.id), nonconformityId: null, title, message });
+}
+
+/**
+ * Geçici görevlendirme firmasına bağlı, hâlâ aktif ve görev bitiş tarihine (endDate) en fazla
+ * TEMP_ASSIGNMENT_ENDING_DAYS gün kalmış çalışanlar için admine bir kereye mahsus "görev bitiyor"
+ * uyarısı gönderir (tempAssignmentEndingReminderSentAt işaretlenir).
+ */
+async function checkTempAssignmentEndingReminders() {
+  try {
+    const now = new Date();
+    const candidates = await db
+      .select({ employee: employees, companyName: companies.name })
+      .from(employees)
+      .innerJoin(companies, eq(employees.companyId, companies.id))
+      .where(
+        and(
+          eq(companies.isTemporaryAssignment, true),
+          eq(employees.isActive, true),
+          isNotNull(employees.endDate),
+          isNull(employees.tempAssignmentEndingReminderSentAt)
+        )
+      );
+
+    for (const { employee: emp, companyName } of candidates) {
+      const daysLeft = daysBetween(now, emp.endDate);
+      if (daysLeft > TEMP_ASSIGNMENT_ENDING_DAYS) continue;
+
+      await notifyAdmins({
+        title: 'Geçici görevlendirme bitiyor',
+        message: `${emp.fullName} (${companyName}) adlı personelin geçici görev tarihi bitiyor (bitiş: ${new Date(emp.endDate).toLocaleDateString('tr-TR')}). Sahadan çıkışı yapılmadıysa kontrol edin.`,
+      });
+
+      await db.update(employees).set({ tempAssignmentEndingReminderSentAt: now }).where(eq(employees.id, emp.id));
+    }
+  } catch (err) {
+    console.error('[scheduler] Geçici görevlendirme bitiş uyarı kontrolü başarısız:', err.message);
+  }
+}
+
+/**
+ * Geçici görevlendirme firmasına bağlı, görev bitiş tarihi (endDate) gelmiş/geçmiş ama hâlâ aktif
+ * görünen çalışanları otomatik arşivler (isActive=false, lastExitDate=endDate) ve admine "görev
+ * bitti" bildirimi gönderir. isActive=true koşulu sorguda olduğu için doğal olarak tekrar
+ * çalışmaz (bir kez arşivlenince bir daha adaylar arasına girmez) - ayrı bir "gönderildi" işareti
+ * gerekmez.
+ */
+async function checkTempAssignmentEndedAndArchive() {
+  try {
+    const now = new Date();
+    const candidates = await db
+      .select({ employee: employees, companyName: companies.name })
+      .from(employees)
+      .innerJoin(companies, eq(employees.companyId, companies.id))
+      .where(
+        and(
+          eq(companies.isTemporaryAssignment, true),
+          eq(employees.isActive, true),
+          isNotNull(employees.endDate)
+        )
+      );
+
+    for (const { employee: emp, companyName } of candidates) {
+      if (new Date(emp.endDate).getTime() > now.getTime()) continue;
+
+      await db.update(employees).set({ isActive: false, lastExitDate: emp.endDate }).where(eq(employees.id, emp.id));
+
+      await notifyAdmins({
+        title: 'Geçici görevlendirme bitti',
+        message: `${emp.fullName} (${companyName}) adlı personelin geçici görevlendirmesi bitti (${new Date(emp.endDate).toLocaleDateString('tr-TR')}) ve otomatik olarak arşivlendi.`,
+      });
+    }
+  } catch (err) {
+    console.error('[scheduler] Geçici görevlendirme bitiş/arşivleme kontrolü başarısız:', err.message);
+  }
+}
+
+/**
+ * Aktif çalışanların İSG eğitim geçerlilik tarihine (isgTrainingExpiryDate) en fazla
+ * EXPIRY_REMINDER_DAYS gün kalmışsa admine bir kereye mahsus uyarı gönderir.
+ */
+async function checkTrainingExpiryReminders() {
+  try {
+    const now = new Date();
+    const candidates = await db
+      .select({ employee: employees, companyName: companies.name })
+      .from(employees)
+      .leftJoin(companies, eq(employees.companyId, companies.id))
+      .where(
+        and(
+          eq(employees.isActive, true),
+          isNotNull(employees.isgTrainingExpiryDate),
+          isNull(employees.trainingExpiryReminderSentAt)
+        )
+      );
+
+    for (const { employee: emp, companyName } of candidates) {
+      const daysLeft = daysBetween(now, emp.isgTrainingExpiryDate);
+      if (daysLeft > EXPIRY_REMINDER_DAYS) continue;
+
+      await notifyAdmins({
+        title: 'İSG eğitim geçerlilik süresi doluyor',
+        message: `${emp.fullName}${companyName ? ` (${companyName})` : ''} adlı personelin İSG eğitim sertifikası süresi doluyor (${new Date(emp.isgTrainingExpiryDate).toLocaleDateString('tr-TR')}). Eğitimin yenilenmesi gerekiyor.`,
+      });
+
+      await db.update(employees).set({ trainingExpiryReminderSentAt: now }).where(eq(employees.id, emp.id));
+    }
+  } catch (err) {
+    console.error('[scheduler] İSG eğitim süresi uyarı kontrolü başarısız:', err.message);
+  }
+}
+
+/**
+ * Aktif çalışanların tetkik (medicalExamDate) ve Ek-2 (ek2Date) tarihlerinden, bağlı oldukları
+ * firmanın tehlike sınıfına göre hesaplanan geçerlilik süresinin dolmasına en fazla
+ * EXPIRY_REMINDER_DAYS gün kalmışsa admine bir kereye mahsus uyarı gönderir. Firmanın tehlike
+ * sınıfı tanımlı değilse süre hesaplanamayacağından o çalışan atlanır (bkz. healthExamValidityYears).
+ */
+async function checkHealthExamExpiryReminders() {
+  try {
+    const now = new Date();
+    const rows = await db
+      .select({ employee: employees, companyName: companies.name, dangerClass: companies.dangerClass })
+      .from(employees)
+      .innerJoin(companies, eq(employees.companyId, companies.id))
+      .where(eq(employees.isActive, true));
+
+    for (const { employee: emp, companyName, dangerClass } of rows) {
+      const validityYears = healthExamValidityYears(dangerClass);
+      if (!validityYears) continue;
+
+      if (emp.medicalExamDate && !emp.medicalExamExpiryReminderSentAt) {
+        const expiry = addYears(emp.medicalExamDate, validityYears);
+        const daysLeft = daysBetween(now, expiry);
+        if (daysLeft <= EXPIRY_REMINDER_DAYS) {
+          await notifyAdmins({
+            title: 'Periyodik tetkik süresi doluyor',
+            message: `${emp.fullName} (${companyName}) adlı personelin periyodik sağlık tetkik süresi doluyor (tahmini: ${expiry.toLocaleDateString('tr-TR')}, tehlike sınıfına göre hesaplandı). Yeni tetkik planlanması gerekiyor.`,
+          });
+          await db.update(employees).set({ medicalExamExpiryReminderSentAt: now }).where(eq(employees.id, emp.id));
+        }
+      }
+
+      if (emp.ek2Date && !emp.ek2ExpiryReminderSentAt) {
+        const expiry = addYears(emp.ek2Date, validityYears);
+        const daysLeft = daysBetween(now, expiry);
+        if (daysLeft <= EXPIRY_REMINDER_DAYS) {
+          await notifyAdmins({
+            title: 'Ek-2 (periyodik muayene formu) süresi doluyor',
+            message: `${emp.fullName} (${companyName}) adlı personelin Ek-2 periyodik muayene formu süresi doluyor (tahmini: ${expiry.toLocaleDateString('tr-TR')}, tehlike sınıfına göre hesaplandı). Yeni muayene planlanması gerekiyor.`,
+          });
+          await db.update(employees).set({ ek2ExpiryReminderSentAt: now }).where(eq(employees.id, emp.id));
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[scheduler] Tetkik/Ek-2 süresi uyarı kontrolü başarısız:', err.message);
+  }
+}
+
 function startScheduler() {
   checkDeadlineReminders();
   checkDeadlineExpirations();
   checkArchiveReminders();
+  checkTempAssignmentEndingReminders();
+  checkTempAssignmentEndedAndArchive();
+  checkTrainingExpiryReminders();
+  checkHealthExamExpiryReminders();
   return setInterval(() => {
     checkDeadlineReminders();
     checkDeadlineExpirations();
     checkArchiveReminders();
+    checkTempAssignmentEndingReminders();
+    checkTempAssignmentEndedAndArchive();
+    checkTrainingExpiryReminders();
+    checkHealthExamExpiryReminders();
   }, CHECK_INTERVAL_MS);
 }
 
-module.exports = { startScheduler, checkDeadlineReminders, checkDeadlineExpirations, checkArchiveReminders };
+module.exports = {
+  startScheduler,
+  checkDeadlineReminders,
+  checkDeadlineExpirations,
+  checkArchiveReminders,
+  checkTempAssignmentEndingReminders,
+  checkTempAssignmentEndedAndArchive,
+  checkTrainingExpiryReminders,
+  checkHealthExamExpiryReminders,
+};

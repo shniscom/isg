@@ -47,6 +47,7 @@ const EMPLOYEE_DATE_FIELDS = [
   'firstStartDate',
   'lastExitDate',
   'orientationTrainingDate',
+  'ek2Date',
 ];
 
 /** payload jsonb round-trip'i sonrası string'e dönmüş olabilecek tarih alanlarını gerçek Date nesnesine çevirir. */

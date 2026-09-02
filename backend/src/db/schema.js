@@ -255,9 +255,17 @@ const employees = pgTable('employees', {
   isgTrainingExpiryDate: timestamp('isg_training_expiry_date', { withTimezone: true }), // İSG eğitimi geçerlilik (bitiş) tarihi
   medicalExamDate: timestamp('medical_exam_date', { withTimezone: true }), // tetkik tarihi
   startWorkTrainingNote: text('start_work_training_note'), // işe başlama eğitimi notu
-  ek2Note: text('ek2_note'), // EK-2 formu notu/tarihi (serbest metin)
-  healthAuthoritySignatureNote: text('health_authority_signature_note'), // sağlık yetkilisi imza notu
+  ek2Note: text('ek2_note'), // EK-2 formu notu/tarihi (serbest metin, eski/genel amaçlı alan)
+  // EK-2 (periyodik sağlık muayenesi) yapılandırılmış alanları - serbest metin ek2Note'un yanında,
+  // süre takibi/bildirim hesaplaması yapılabilsin diye ayrı boolean+tarih olarak tutulur.
+  ek2Suitable: boolean('ek2_suitable').notNull().default(false), // Ek-2 formuna göre işe uygun mu
+  ek2Date: timestamp('ek2_date', { withTimezone: true }), // Ek-2 formunun düzenlendiği tarih
+  healthAuthoritySignatureNote: text('health_authority_signature_note'), // sağlık yetkilisi imza notu (eski/genel amaçlı alan)
+  healthAuthorityDoctorName: text('health_authority_doctor_name'), // işyeri hekimi ad soyad
+  healthAuthorityCertificateNo: text('health_authority_certificate_no'), // işyeri hekimi sertifika no
   isgRole: text('isg_role'), // İSG görevi (ör. Çalışan Temsilcisi)
+  isgTrainerName: text('isg_trainer_name'), // İSG eğitimini veren iş güvenliği uzmanı ad soyad
+  isgTrainerCertificateNo: text('isg_trainer_certificate_no'), // İSG eğitimini veren uzmanın sertifika no
   mykCertificateNo: text('myk_certificate_no'), // MYK mesleki yeterlilik belge no
   mykCertificateDate: timestamp('myk_certificate_date', { withTimezone: true }), // MYK belgesinin alındığı tarih
   startDate: timestamp('start_date', { withTimezone: true }), // işe giriş tarihi (yeniden işe girişte bu alan güncellenir - "yeniden giriş tarihi")
@@ -281,6 +289,12 @@ const employees = pgTable('employees', {
   sgkEntryDocExists: boolean('sgk_entry_doc_exists').notNull().default(false), // SGK işe giriş bildirgesi var mı
   orientationTrainingDate: timestamp('orientation_training_date', { withTimezone: true }), // yeni sahada verilen oryantasyon eğitimi tarihi
   ppeHandoverDocExists: boolean('ppe_handover_doc_exists').notNull().default(false), // KKD zimmet tutanağı yeni sahaya aktarıldı mı
+  // Bildirim tekrarını önlemek için "bu bildirim daha önce gönderildi mi" işaretleri (bkz.
+  // services/scheduledJobs.service.js - nonconformities.deadlineReminderSentAt ile aynı desen).
+  tempAssignmentEndingReminderSentAt: timestamp('temp_assignment_ending_reminder_sent_at', { withTimezone: true }), // "görev bitiyor" (5 gün kala) bildirimi
+  trainingExpiryReminderSentAt: timestamp('training_expiry_reminder_sent_at', { withTimezone: true }), // İSG eğitim geçerlilik süresi bildirimi
+  medicalExamExpiryReminderSentAt: timestamp('medical_exam_expiry_reminder_sent_at', { withTimezone: true }), // tetkik süresi bildirimi
+  ek2ExpiryReminderSentAt: timestamp('ek2_expiry_reminder_sent_at', { withTimezone: true }), // Ek-2 süresi bildirimi
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index('employees_project_idx').on(table.projectId),
