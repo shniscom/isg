@@ -10,7 +10,27 @@ const { logAudit } = require('../../utils/audit');
 
 const router = express.Router();
 
-const VIEW_PERMISSIONS = ['firma_yonetme', 'firma_goruntuleme'];
+// GET / (bir firmanın rol atamalarını listeleme) yalnızca firma yönetim yetkilileriyle sınırlı
+// değil: çalışan ekleme/düzenleme yetkisi olan (insan_kaynaklari_yonetimi/uygunsuzluk_acma)
+// kullanıcılar da bu listeyi görebilmeli - aksi halde çalışan formundaki "eğitimi veren İSG
+// uzmanı/işyeri hekimi/DSP" seçim kutusu onlar için hep boş kalır (bkz. EmployeesPage.jsx /
+// EmployeeDetailPage.jsx RoleAssignmentSelect kullanımı).
+const VIEW_PERMISSIONS = ['firma_yonetme', 'firma_goruntuleme', 'gecici_gorevlendirme_yonetimi', 'insan_kaynaklari_yonetimi', 'uygunsuzluk_acma'];
+// Firma rol atamalarını (İSG uzmanı/işyeri hekimi/DSP vb.) düzenleme normalde yalnızca
+// 'firma_yonetme' gerektirir. Ancak geçici görevlendirme firmaları (companies.isTemporaryAssignment
+// =true) için 'gecici_gorevlendirme_yonetimi' yetkisi de yeterlidir - admin/companies.routes.js'deki
+// WRITE_PERMISSIONS dallanma deseniyle aynı mantık (bkz. o dosyadaki yorum).
+const WRITE_PERMISSIONS = ['firma_yonetme', 'gecici_gorevlendirme_yonetimi'];
+
+function hasPermission(req, key) {
+  return req.user.isSystemAdmin || (req.user.permissions || []).includes(key);
+}
+
+function assertCanWrite(req, company) {
+  if (hasPermission(req, 'firma_yonetme')) return;
+  if (company.isTemporaryAssignment && hasPermission(req, 'gecici_gorevlendirme_yonetimi')) return;
+  throw ApiError.forbidden('Yalnızca geçici görevlendirme firmalarının rol atamalarını düzenleme yetkiniz var.');
+}
 
 // Firma rolü tipleri artık sabit bir liste değil, admin tarafından "Görevler" sayfasından
 // yönetilen company_role_types tablosudur (bkz. company-role-types.routes.js). İşveren ve
@@ -107,7 +127,7 @@ router.get(
 
 router.post(
   '/',
-  requirePermission('firma_yonetme'),
+  requirePermission(WRITE_PERMISSIONS),
   asyncHandler(async (req, res) => {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz rol bilgisi.', parsed.error.flatten());
@@ -115,6 +135,7 @@ router.post(
 
     const [company] = await db.select().from(companies).where(eq(companies.id, data.companyId)).limit(1);
     if (!company) throw ApiError.notFound('Firma bulunamadı.');
+    assertCanWrite(req, company);
 
     const [roleTypeRow] = await db.select().from(companyRoleTypes).where(eq(companyRoleTypes.key, data.roleType)).limit(1);
     if (!roleTypeRow) throw ApiError.badRequest('Geçersiz rol tipi.');
@@ -155,10 +176,67 @@ router.post(
   })
 );
 
+const patchSchema = z.object({
+  outsideFullName: z.string().optional().nullable(),
+  outsideCompanyName: z.string().optional().nullable(),
+  outsideNationalId: z.string().optional().nullable(),
+  outsidePhone: z.string().optional().nullable(),
+  certificateNo: z.string().optional().nullable(),
+  certificateClass: z.string().optional().nullable(),
+  certificateStartDate: z.string().optional().nullable(),
+  certificateEndDate: z.string().optional().nullable(),
+  notes: z.string().optional().nullable(),
+});
+
+// Bir rol atamasını düzenler - en tipik kullanımı, görevden ayrılan bir uzman/hekim/DSP için
+// "çıkış tarihi" (certificateEndDate) girmektir; böylece kayıt silinmeden geçmişte kalır ve
+// yerine yeni bir atama (POST) eklenebilir. companyId/roleType/source/employeeId değiştirilemez
+// (bunlar için mevcut kayıt silinip yeniden oluşturulmalı) - PATCH yalnızca kimlik/sertifika/
+// tarih/not alanlarını günceller.
+router.patch(
+  '/:id',
+  requirePermission(WRITE_PERMISSIONS),
+  asyncHandler(async (req, res) => {
+    const parsed = patchSchema.safeParse(req.body);
+    if (!parsed.success) throw ApiError.badRequest('Geçersiz rol bilgisi.', parsed.error.flatten());
+
+    const [existing] = await db.select().from(companyRoleAssignments).where(eq(companyRoleAssignments.id, req.params.id)).limit(1);
+    if (!existing) throw ApiError.notFound('Kayıt bulunamadı.');
+    const [company] = await db.select().from(companies).where(eq(companies.id, existing.companyId)).limit(1);
+    if (!company) throw ApiError.notFound('Firma bulunamadı.');
+    assertCanWrite(req, company);
+
+    const data = parsed.data;
+    const values = {};
+    if (existing.source === 'DISARIDAN') {
+      if (data.outsideFullName !== undefined) values.outsideFullName = data.outsideFullName || null;
+      if (data.outsideCompanyName !== undefined) values.outsideCompanyName = data.outsideCompanyName || null;
+      if (data.outsideNationalId !== undefined) values.outsideNationalId = data.outsideNationalId || null;
+      if (data.outsidePhone !== undefined) values.outsidePhone = data.outsidePhone || null;
+    }
+    if (data.certificateNo !== undefined) values.certificateNo = data.certificateNo || null;
+    if (data.certificateClass !== undefined) values.certificateClass = data.certificateClass || null;
+    if (data.certificateStartDate !== undefined) values.certificateStartDate = toDateOrNull(data.certificateStartDate);
+    if (data.certificateEndDate !== undefined) values.certificateEndDate = toDateOrNull(data.certificateEndDate);
+    if (data.notes !== undefined) values.notes = data.notes || null;
+
+    const [updated] = await db.update(companyRoleAssignments).set(values).where(eq(companyRoleAssignments.id, req.params.id)).returning();
+
+    await logAudit({ userId: req.user.sub, action: 'COMPANY_ROLE_UPDATE', entityType: 'company_role_assignment', entityId: updated.id, details: values, ipAddress: req.ip });
+    res.json({ role: updated });
+  })
+);
+
 router.delete(
   '/:id',
-  requirePermission('firma_yonetme'),
+  requirePermission(WRITE_PERMISSIONS),
   asyncHandler(async (req, res) => {
+    const [existing] = await db.select().from(companyRoleAssignments).where(eq(companyRoleAssignments.id, req.params.id)).limit(1);
+    if (!existing) throw ApiError.notFound('Kayıt bulunamadı.');
+    const [company] = await db.select().from(companies).where(eq(companies.id, existing.companyId)).limit(1);
+    if (!company) throw ApiError.notFound('Firma bulunamadı.');
+    assertCanWrite(req, company);
+
     const [deleted] = await db.delete(companyRoleAssignments).where(eq(companyRoleAssignments.id, req.params.id)).returning();
     if (!deleted) throw ApiError.notFound('Kayıt bulunamadı.');
 

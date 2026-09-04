@@ -261,11 +261,19 @@ const employees = pgTable('employees', {
   ek2Suitable: boolean('ek2_suitable').notNull().default(false), // Ek-2 formuna göre işe uygun mu
   ek2Date: timestamp('ek2_date', { withTimezone: true }), // Ek-2 formunun düzenlendiği tarih
   healthAuthoritySignatureNote: text('health_authority_signature_note'), // sağlık yetkilisi imza notu (eski/genel amaçlı alan)
-  healthAuthorityDoctorName: text('health_authority_doctor_name'), // işyeri hekimi ad soyad
-  healthAuthorityCertificateNo: text('health_authority_certificate_no'), // işyeri hekimi sertifika no
   isgRole: text('isg_role'), // İSG görevi (ör. Çalışan Temsilcisi)
-  isgTrainerName: text('isg_trainer_name'), // İSG eğitimini veren iş güvenliği uzmanı ad soyad
-  isgTrainerCertificateNo: text('isg_trainer_certificate_no'), // İSG eğitimini veren uzmanın sertifika no
+  // Bu çalışana eğitimi veren İSG uzmanı / muayenesini yapan işyeri hekimi / DSP - artık serbest
+  // metin DEĞİL, firmaya (companyId) atanmış company_role_assignments kaydına referans (bkz.
+  // company-roles.routes.js). Böylece "hangi uzman/hekim ne zaman bu firmadaydı" geçmişinden,
+  // çalışanın eğitim/muayene tarihine denk gelen doğru kişi seçilebiliyor. Eski isgTrainerName/
+  // isgTrainerCertificateNo/healthAuthorityDoctorName/healthAuthorityCertificateNo serbest metin
+  // alanları 0019 migrasyonunda bu kayıtlara dönüştürülüp kaldırıldı (bkz. migration dosyası).
+  isgSpecialistAssignmentId: text('isg_specialist_assignment_id').references(() => companyRoleAssignments.id, { onDelete: 'set null' }),
+  physicianAssignmentId: text('physician_assignment_id').references(() => companyRoleAssignments.id, { onDelete: 'set null' }),
+  dspAssignmentId: text('dsp_assignment_id').references(() => companyRoleAssignments.id, { onDelete: 'set null' }),
+  // Tetkik tarihi girildiğinde opsiyonel olarak hangi tetkiklerin yapıldığı (SFT, tam kan, v.s.)
+  // - metin dizisi (jsonb) olarak tutulur, sabit liste frontend'de tanımlıdır.
+  medicalExamTypes: jsonb('medical_exam_types'),
   mykCertificateNo: text('myk_certificate_no'), // MYK mesleki yeterlilik belge no
   mykCertificateDate: timestamp('myk_certificate_date', { withTimezone: true }), // MYK belgesinin alındığı tarih
   startDate: timestamp('start_date', { withTimezone: true }), // işe giriş tarihi (yeniden işe girişte bu alan güncellenir - "yeniden giriş tarihi")

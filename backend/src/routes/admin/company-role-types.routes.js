@@ -17,7 +17,13 @@ const { logAudit } = require('../../utils/audit');
  * "Görevler" admin sayfasının bir parçası.
  */
 const router = express.Router();
-router.use(requirePermission('kullanici_yonetme'));
+
+// Katalog kaydı ekleme/düzenleme/silme (Görevler sayfası) yalnızca kullanici_yonetme gerektirir.
+// Ancak listeyi GÖRÜNTÜLEME (GET) - firma detayındaki "Roller" sekmesinde İSG uzmanı/işyeri
+// hekimi/DSP dropdown'ını doldurmak için - firma_yonetme/firma_goruntuleme/gecici_gorevlendirme_
+// yonetimi yetkilerinden biriyle de mümkün olmalı; aksi halde bu kullanıcılar rol tipi listesini
+// hiç göremez ve Roller sekmesindeki rol seçim kutusu boş kalır (bkz. company-roles.routes.js).
+const VIEW_PERMISSIONS = ['kullanici_yonetme', 'firma_yonetme', 'firma_goruntuleme', 'gecici_gorevlendirme_yonetimi'];
 
 const CATEGORIES = ['FIRMA_ROLU', 'ACIL_EKIP'];
 
@@ -33,6 +39,7 @@ const createSchema = z.object({
 
 router.get(
   '/',
+  requirePermission(VIEW_PERMISSIONS),
   asyncHandler(async (req, res) => {
     const rows = await db.select().from(companyRoleTypes).orderBy(companyRoleTypes.category, companyRoleTypes.sortOrder, companyRoleTypes.label);
     res.json({ roleTypes: rows });
@@ -41,6 +48,7 @@ router.get(
 
 router.post(
   '/',
+  requirePermission('kullanici_yonetme'),
   asyncHandler(async (req, res) => {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz firma rolü bilgisi.', parsed.error.flatten());
@@ -65,6 +73,7 @@ router.post(
 
 router.patch(
   '/:id',
+  requirePermission('kullanici_yonetme'),
   asyncHandler(async (req, res) => {
     const parsed = createSchema.omit({ key: true }).partial().safeParse(req.body);
     if (!parsed.success) throw ApiError.badRequest('Geçersiz firma rolü bilgisi.', parsed.error.flatten());
@@ -79,6 +88,7 @@ router.patch(
 
 router.delete(
   '/:id',
+  requirePermission('kullanici_yonetme'),
   asyncHandler(async (req, res) => {
     const [existing] = await db.select().from(companyRoleTypes).where(eq(companyRoleTypes.id, req.params.id)).limit(1);
     if (!existing) throw ApiError.notFound('Firma rolü bulunamadı.');

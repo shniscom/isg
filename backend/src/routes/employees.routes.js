@@ -2,7 +2,7 @@ const express = require('express');
 const { z } = require('zod');
 const { eq, and, or, count, ilike, inArray, desc, asc, isNull, isNotNull, ne, lt, sql } = require('drizzle-orm');
 const { db } = require('../db/client');
-const { employees, nonconformities, companies, userProjects, incidents } = require('../db/schema');
+const { employees, nonconformities, companies, userProjects, incidents, companyRoleAssignments } = require('../db/schema');
 const { requireAuth } = require('../middleware/auth');
 const { requireSystemAdmin, requirePermission } = require('../middleware/permission');
 const { asyncHandler } = require('../utils/asyncHandler');
@@ -38,6 +38,25 @@ function toDateOrNull(value) {
  * gelene kadar hâlâ sahada/görevde demektir. Gelecek tarihli çıkışların otomatik arşivlenmesi,
  * services/scheduledJobs.service.js içindeki günlük kontrolle yapılır (bkz. o dosya).
  */
+/**
+ * Bir çalışana bağlanmak istenen İSG uzmanı/işyeri hekimi/DSP atama kaydının (companyRoleAssignments
+ * satırının) gerçekten o çalışanın firmasına ait ve doğru rol tipinde olduğunu doğrular - aksi
+ * halde bir kullanıcı başka bir firmanın uzmanını (veya alakasız bir rolü, ör. Şantiye Şefi'ni)
+ * yanlışlıkla/kasıtlı olarak "eğitimi veren uzman" olarak bağlayabilir. assignmentId boş/null ise
+ * doğrulama atlanır (seçim temizleniyor demektir).
+ */
+async function assertAssignmentBelongsToCompany(assignmentId, companyId, roleType, label) {
+  if (!assignmentId) return;
+  if (!companyId) throw ApiError.badRequest(`${label} seçebilmek için önce çalışanın firması seçilmelidir.`);
+  const [row] = await db.select().from(companyRoleAssignments).where(eq(companyRoleAssignments.id, assignmentId)).limit(1);
+  if (!row || row.companyId !== companyId) {
+    throw ApiError.badRequest(`Seçilen ${label.toLowerCase()} bu çalışanın firmasına ait değil.`);
+  }
+  if (row.roleType !== roleType) {
+    throw ApiError.badRequest(`Seçilen kayıt "${label}" rolünde değil.`);
+  }
+}
+
 function isPastOrToday(value) {
   if (!value) return false;
   const d = new Date(value);
@@ -180,6 +199,7 @@ const EMPLOYEE_LIST_COLUMNS = {
   isgTrainingDate: employees.isgTrainingDate,
   isgTrainingExpiryDate: employees.isgTrainingExpiryDate,
   medicalExamDate: employees.medicalExamDate,
+  ek2Date: employees.ek2Date,
   startWorkTrainingNote: employees.startWorkTrainingNote,
   ek2Note: employees.ek2Note,
   healthAuthoritySignatureNote: employees.healthAuthoritySignatureNote,
@@ -416,10 +436,15 @@ const createSchema = z.object({
   // Sağlık/eğitim yapılandırılmış alanları (herhangi bir çalışan için geçerli, temp'e özel değil).
   ek2Suitable: z.boolean().optional(),
   ek2Date: z.string().optional().nullable().or(z.literal('')),
-  healthAuthorityDoctorName: z.string().optional().nullable().or(z.literal('')),
-  healthAuthorityCertificateNo: z.string().optional().nullable().or(z.literal('')),
-  isgTrainerName: z.string().optional().nullable().or(z.literal('')),
-  isgTrainerCertificateNo: z.string().optional().nullable().or(z.literal('')),
+  // Eğitimi veren İSG uzmanı / muayene eden işyeri hekimi / DSP - artık serbest metin değil,
+  // çalışanın firmasına (companyId) atanmış company_role_assignments kaydına referans (bkz.
+  // company-roles.routes.js). '' boş seçenek anlamına gelir (temizler).
+  isgSpecialistAssignmentId: z.string().optional().nullable().or(z.literal('')),
+  physicianAssignmentId: z.string().optional().nullable().or(z.literal('')),
+  dspAssignmentId: z.string().optional().nullable().or(z.literal('')),
+  // Tetkik tarihi girildiyse opsiyonel olarak hangi tetkiklerin yapıldığı (sabit liste
+  // frontend'de tanımlı - bkz. lib/employee.js MEDICAL_EXAM_TYPES).
+  medicalExamTypes: z.array(z.string()).optional().nullable(),
 });
 
 router.post(
@@ -470,6 +495,10 @@ router.post(
       }
     }
 
+    await assertAssignmentBelongsToCompany(parsed.data.isgSpecialistAssignmentId || null, parsed.data.companyId || null, 'ISG_UZMANI', 'İş Güvenliği Uzmanı');
+    await assertAssignmentBelongsToCompany(parsed.data.physicianAssignmentId || null, parsed.data.companyId || null, 'ISYERI_HEKIMI', 'İşyeri Hekimi');
+    await assertAssignmentBelongsToCompany(parsed.data.dspAssignmentId || null, parsed.data.companyId || null, 'DIGER_SAGLIK_PERSONELI', 'Diğer Sağlık Personeli');
+
     const employeeData = {
       projectId,
       companyId: parsed.data.companyId || null,
@@ -501,10 +530,10 @@ router.post(
       ppeHandoverDocExists: parsed.data.ppeHandoverDocExists ?? false,
       ek2Suitable: parsed.data.ek2Suitable ?? false,
       ek2Date: toDateOrNull(parsed.data.ek2Date),
-      healthAuthorityDoctorName: parsed.data.healthAuthorityDoctorName || null,
-      healthAuthorityCertificateNo: parsed.data.healthAuthorityCertificateNo || null,
-      isgTrainerName: parsed.data.isgTrainerName || null,
-      isgTrainerCertificateNo: parsed.data.isgTrainerCertificateNo || null,
+      isgSpecialistAssignmentId: parsed.data.isgSpecialistAssignmentId || null,
+      physicianAssignmentId: parsed.data.physicianAssignmentId || null,
+      dspAssignmentId: parsed.data.dspAssignmentId || null,
+      medicalExamTypes: parsed.data.medicalExamTypes && parsed.data.medicalExamTypes.length > 0 ? parsed.data.medicalExamTypes : null,
     };
 
     if (isTemp) {
@@ -561,10 +590,10 @@ const updateSchema = z.object({
   ppeHandoverDocExists: z.boolean().optional(),
   ek2Suitable: z.boolean().optional(),
   ek2Date: z.string().optional().nullable().or(z.literal('')),
-  healthAuthorityDoctorName: z.string().optional().nullable().or(z.literal('')),
-  healthAuthorityCertificateNo: z.string().optional().nullable().or(z.literal('')),
-  isgTrainerName: z.string().optional().nullable().or(z.literal('')),
-  isgTrainerCertificateNo: z.string().optional().nullable().or(z.literal('')),
+  isgSpecialistAssignmentId: z.string().optional().nullable().or(z.literal('')),
+  physicianAssignmentId: z.string().optional().nullable().or(z.literal('')),
+  dspAssignmentId: z.string().optional().nullable().or(z.literal('')),
+  medicalExamTypes: z.array(z.string()).optional().nullable(),
 });
 
 router.patch(
@@ -636,10 +665,21 @@ router.patch(
       values.ek2Date = toDateOrNull(parsed.data.ek2Date);
       values.ek2ExpiryReminderSentAt = null;
     }
-    if (parsed.data.healthAuthorityDoctorName !== undefined) values.healthAuthorityDoctorName = parsed.data.healthAuthorityDoctorName || null;
-    if (parsed.data.healthAuthorityCertificateNo !== undefined) values.healthAuthorityCertificateNo = parsed.data.healthAuthorityCertificateNo || null;
-    if (parsed.data.isgTrainerName !== undefined) values.isgTrainerName = parsed.data.isgTrainerName || null;
-    if (parsed.data.isgTrainerCertificateNo !== undefined) values.isgTrainerCertificateNo = parsed.data.isgTrainerCertificateNo || null;
+    if (parsed.data.isgSpecialistAssignmentId !== undefined) {
+      await assertAssignmentBelongsToCompany(parsed.data.isgSpecialistAssignmentId || null, effectiveCompanyId, 'ISG_UZMANI', 'İş Güvenliği Uzmanı');
+      values.isgSpecialistAssignmentId = parsed.data.isgSpecialistAssignmentId || null;
+    }
+    if (parsed.data.physicianAssignmentId !== undefined) {
+      await assertAssignmentBelongsToCompany(parsed.data.physicianAssignmentId || null, effectiveCompanyId, 'ISYERI_HEKIMI', 'İşyeri Hekimi');
+      values.physicianAssignmentId = parsed.data.physicianAssignmentId || null;
+    }
+    if (parsed.data.dspAssignmentId !== undefined) {
+      await assertAssignmentBelongsToCompany(parsed.data.dspAssignmentId || null, effectiveCompanyId, 'DIGER_SAGLIK_PERSONELI', 'Diğer Sağlık Personeli');
+      values.dspAssignmentId = parsed.data.dspAssignmentId || null;
+    }
+    if (parsed.data.medicalExamTypes !== undefined) {
+      values.medicalExamTypes = parsed.data.medicalExamTypes && parsed.data.medicalExamTypes.length > 0 ? parsed.data.medicalExamTypes : null;
+    }
     if (parsed.data.endDate !== undefined) {
       const endDateRaw = parsed.data.endDate || null;
       // Yalnızca geçmiş/bugünkü bir çıkış tarihi çalışanı otomatik arşive alır; gelecek tarihli
@@ -801,8 +841,42 @@ router.get(
       .where(eq(nonconformities.employeeId, employee.id))
       .orderBy(nonconformities.createdAt);
 
+    // Çalışana bağlı İSG uzmanı/işyeri hekimi/DSP atama kayıtlarını (varsa) çözümleyip, kartta
+    // tek istekle gösterilebilecek özet nesneler olarak ekle (bkz. assertAssignmentBelongsToCompany
+    // yorumu - isgSpecialistAssignmentId vb. artık serbest metin değil company_role_assignments FK'i).
+    const assignmentIds = [employee.isgSpecialistAssignmentId, employee.physicianAssignmentId, employee.dspAssignmentId].filter(Boolean);
+    let assignmentById = new Map();
+    if (assignmentIds.length > 0) {
+      const assignmentRows = await db
+        .select({
+          id: companyRoleAssignments.id,
+          source: companyRoleAssignments.source,
+          employeeFullName: employees.fullName,
+          outsideFullName: companyRoleAssignments.outsideFullName,
+          outsideCompanyName: companyRoleAssignments.outsideCompanyName,
+          certificateNo: companyRoleAssignments.certificateNo,
+          certificateClass: companyRoleAssignments.certificateClass,
+          certificateStartDate: companyRoleAssignments.certificateStartDate,
+          certificateEndDate: companyRoleAssignments.certificateEndDate,
+        })
+        .from(companyRoleAssignments)
+        .leftJoin(employees, eq(companyRoleAssignments.employeeId, employees.id))
+        .where(inArray(companyRoleAssignments.id, assignmentIds));
+      assignmentById = new Map(
+        assignmentRows.map((a) => [
+          a.id,
+          { ...a, fullName: a.source === 'CALISAN' ? a.employeeFullName : a.outsideFullName },
+        ])
+      );
+    }
+
     res.json({
-      employee,
+      employee: {
+        ...employee,
+        isgSpecialistAssignment: employee.isgSpecialistAssignmentId ? assignmentById.get(employee.isgSpecialistAssignmentId) || null : null,
+        physicianAssignment: employee.physicianAssignmentId ? assignmentById.get(employee.physicianAssignmentId) || null : null,
+        dspAssignment: employee.dspAssignmentId ? assignmentById.get(employee.dspAssignmentId) || null : null,
+      },
       nonconformities: rows,
       company: company ? { id: company.id, name: company.name, isTemporaryAssignment: isTemp } : null,
     });
@@ -824,6 +898,8 @@ const importRowSchema = z.object({
   isgTrainingDate: z.string().optional().nullable(),
   isgTrainingExpiryDate: z.string().optional().nullable(),
   medicalExamDate: z.string().optional().nullable(),
+  medicalExamTypes: z.array(z.string()).optional().nullable(),
+  ek2Date: z.string().optional().nullable(),
   startWorkTrainingNote: z.string().optional().nullable(),
   ek2Note: z.string().optional().nullable(),
   healthAuthoritySignatureNote: z.string().optional().nullable(),
@@ -889,6 +965,8 @@ router.post(
           isgTrainingDate: toDateOrNull(row.isgTrainingDate),
           isgTrainingExpiryDate: toDateOrNull(row.isgTrainingExpiryDate),
           medicalExamDate: toDateOrNull(row.medicalExamDate),
+          medicalExamTypes: row.medicalExamTypes && row.medicalExamTypes.length > 0 ? row.medicalExamTypes : null,
+          ek2Date: toDateOrNull(row.ek2Date),
           startWorkTrainingNote: (row.startWorkTrainingNote || '').trim() || null,
           ek2Note: (row.ek2Note || '').trim() || null,
           healthAuthoritySignatureNote: (row.healthAuthoritySignatureNote || '').trim() || null,

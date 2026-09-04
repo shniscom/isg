@@ -3634,7 +3634,7 @@ test('zamanlayıcı: tetkik/Ek-2 süresi tehlike sınıfına göre hesaplanıp 7
   assert.equal(tetkikCount, 1);
 });
 
-test('çalışanlar: yeni sağlık/eğitim alanları (Ek-2, işyeri hekimi, İSG uzmanı) kaydedilip düzenlenebiliyor', async () => {
+test('çalışanlar: yeni sağlık/eğitim alanları (Ek-2, tetkik türleri) kaydedilip düzenlenebiliyor', async () => {
   const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Sağlık Alanları Test Projesi', code: 'TST-041' } });
   const projectId = proj.body.project.id;
   const company = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Sağlık Alanları Test Firması', type: 'TASERON' } });
@@ -3650,14 +3650,11 @@ test('çalışanlar: yeni sağlık/eğitim alanları (Ek-2, işyeri hekimi, İSG
       position: 'Kaynakçı',
       startDate: '2026-01-01',
       medicalExamDate: '2026-01-05',
+      medicalExamTypes: ['SFT', 'Tam Kan', 'EKG'],
       ek2Suitable: true,
       ek2Date: '2026-01-06',
-      healthAuthorityDoctorName: 'Dr. Ayşe Yılmaz',
-      healthAuthorityCertificateNo: 'IH-12345',
       isgTrainingDate: '2026-01-07',
       isgTrainingExpiryDate: '2028-01-07',
-      isgTrainerName: 'Mehmet Demir',
-      isgTrainerCertificateNo: 'IG-67890',
       mykCertificateNo: 'MYK-11223',
     },
   });
@@ -3665,18 +3662,147 @@ test('çalışanlar: yeni sağlık/eğitim alanları (Ek-2, işyeri hekimi, İSG
   const emp = create.body.employee;
   assert.equal(emp.ek2Suitable, true);
   assert.ok(emp.ek2Date);
-  assert.equal(emp.healthAuthorityDoctorName, 'Dr. Ayşe Yılmaz');
-  assert.equal(emp.healthAuthorityCertificateNo, 'IH-12345');
-  assert.equal(emp.isgTrainerName, 'Mehmet Demir');
-  assert.equal(emp.isgTrainerCertificateNo, 'IG-67890');
+  assert.deepEqual(emp.medicalExamTypes, ['SFT', 'Tam Kan', 'EKG']);
 
   const patch = await api('PATCH', `/employees/${emp.id}`, {
     token: adminToken,
-    body: { ek2Suitable: false, healthAuthorityDoctorName: 'Dr. Ali Kaya' },
+    body: { ek2Suitable: false, medicalExamTypes: ['Odyo'] },
   });
   assert.equal(patch.status, 200);
   assert.equal(patch.body.employee.ek2Suitable, false);
-  assert.equal(patch.body.employee.healthAuthorityDoctorName, 'Dr. Ali Kaya');
+  assert.deepEqual(patch.body.employee.medicalExamTypes, ['Odyo']);
   // Diğer alanlar dokunulmadıkça korunmalı (partial update).
-  assert.equal(patch.body.employee.isgTrainerName, 'Mehmet Demir');
+  assert.equal(patch.body.employee.mykCertificateNo, 'MYK-11223');
+});
+
+test('firma rolleri: İSG uzmanı/işyeri hekimi kaydı (atama-çıkış tarihli) eklenip düzenlenebiliyor, çalışana bağlanabiliyor', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Roster Test Projesi', code: 'TST-042' } });
+  const projectId = proj.body.project.id;
+  const companyA = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Roster Firma A', type: 'TASERON' } });
+  const companyAId = companyA.body.company.id;
+  const companyB = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Roster Firma B', type: 'TASERON' } });
+  const companyBId = companyB.body.company.id;
+
+  // Firma A'ya bir İSG uzmanı ata (dışarıdan, OSGB üzerinden) - "sınıf" A/B/C serbest metin
+  // olarak kabul edilir (frontend Select ile A/B/C'ye kısıtlar, backend serbest bırakır).
+  const specialist1 = await api('POST', '/admin/company-roles', {
+    token: adminToken,
+    body: {
+      companyId: companyAId,
+      roleType: 'ISG_UZMANI',
+      source: 'DISARIDAN',
+      outsideFullName: 'Uzman Bir',
+      certificateNo: 'ISG-001',
+      certificateClass: 'B Sınıfı',
+      certificateStartDate: '2025-01-01',
+      certificateEndDate: '2025-06-30',
+    },
+  });
+  assert.equal(specialist1.status, 201);
+  const specialist2 = await api('POST', '/admin/company-roles', {
+    token: adminToken,
+    body: {
+      companyId: companyAId,
+      roleType: 'ISG_UZMANI',
+      source: 'DISARIDAN',
+      outsideFullName: 'Uzman İki',
+      certificateNo: 'ISG-002',
+      certificateClass: 'A Sınıfı',
+      certificateStartDate: '2025-08-15',
+    },
+  });
+  assert.equal(specialist2.status, 201);
+
+  const listRes = await api('GET', `/admin/company-roles?companyId=${companyAId}`, { token: adminToken });
+  assert.equal(listRes.body.roles.length, 2);
+
+  // PATCH ile "çıkış tarihi gir" (uzman ayrıldı) - kayıt silinmez, geçmişte kalır.
+  const patchRes = await api('PATCH', `/admin/company-roles/${specialist1.body.role.id}`, { token: adminToken, body: { certificateEndDate: '2025-06-30' } });
+  assert.equal(patchRes.status, 200);
+  assert.ok(patchRes.body.role.certificateEndDate);
+
+  // Bir çalışan, Firma A'ya kaydedilirken bu uzmanlardan birine (2 numaralı, hâlâ aktif) bağlanabilmeli.
+  const emp = await api('POST', '/employees', {
+    token: adminToken,
+    body: {
+      projectId,
+      companyId: companyAId,
+      fullName: 'Roster Çalışanı',
+      nationalId: '99999999931',
+      position: 'Kaynakçı',
+      startDate: '2025-09-01',
+      isgSpecialistAssignmentId: specialist2.body.role.id,
+    },
+  });
+  assert.equal(emp.status, 201);
+  assert.equal(emp.body.employee.isgSpecialistAssignmentId, specialist2.body.role.id);
+
+  // Başka bir firmanın (B) uzmanına bağlamaya çalışmak reddedilmeli.
+  const specialistB = await api('POST', '/admin/company-roles', {
+    token: adminToken,
+    body: { companyId: companyBId, roleType: 'ISG_UZMANI', source: 'DISARIDAN', outsideFullName: 'Firma B Uzmanı' },
+  });
+  const rejected = await api('POST', '/employees', {
+    token: adminToken,
+    body: {
+      projectId,
+      companyId: companyAId,
+      fullName: 'Yanlış Firma Bağlantılı Çalışan',
+      nationalId: '99999999932',
+      position: 'Usta',
+      startDate: '2025-09-01',
+      isgSpecialistAssignmentId: specialistB.body.role.id,
+    },
+  });
+  assert.equal(rejected.status, 400);
+
+  // Doğru firma ama yanlış rol tipi (ör. İşyeri Hekimi ID'sini İSG uzmanı alanına vermek) de reddedilmeli.
+  const physician = await api('POST', '/admin/company-roles', {
+    token: adminToken,
+    body: { companyId: companyAId, roleType: 'ISYERI_HEKIMI', source: 'DISARIDAN', outsideFullName: 'Dr. Test Hekim', certificateNo: 'IH-999' },
+  });
+  const wrongRoleType = await api('PATCH', `/employees/${emp.body.employee.id}`, {
+    token: adminToken,
+    body: { isgSpecialistAssignmentId: physician.body.role.id },
+  });
+  assert.equal(wrongRoleType.status, 400);
+
+  // Doğru rol tipiyle (işyeri hekimi alanına hekim) PATCH başarılı olmalı, ve detay uç noktası
+  // (GET /employees/:id/nonconformities) çözümlenmiş atama nesnelerini dönmeli.
+  const patchEmp = await api('PATCH', `/employees/${emp.body.employee.id}`, { token: adminToken, body: { physicianAssignmentId: physician.body.role.id } });
+  assert.equal(patchEmp.status, 200);
+  const detail = await api('GET', `/employees/${emp.body.employee.id}/nonconformities`, { token: adminToken });
+  assert.equal(detail.body.employee.isgSpecialistAssignment.fullName, 'Uzman İki');
+  assert.equal(detail.body.employee.physicianAssignment.fullName, 'Dr. Test Hekim');
+
+  // Rol kaydı silme.
+  const del = await api('DELETE', `/admin/company-roles/${specialistB.body.role.id}`, { token: adminToken });
+  assert.equal(del.status, 200);
+});
+
+test('geçici görevlendirme firmaları: düzenlenebiliyor ve silinebiliyor (gecici_gorevlendirme_yonetimi yetkisiyle de)', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Geçici Firma Düzenleme Test Projesi', code: 'TST-043' } });
+  const projectId = proj.body.project.id;
+  const tempCompany = await api('POST', '/admin/companies', {
+    token: adminToken,
+    body: { projectId, name: 'Düzenlenecek Geçici Firma', type: 'TASERON', isTemporaryAssignment: true },
+  });
+  const tempCompanyId = tempCompany.body.company.id;
+
+  const patch = await api('PATCH', `/admin/companies/${tempCompanyId}`, { token: adminToken, body: { name: 'Güncellenmiş Geçici Firma', scopeOfWork: 'Yeni İş Kolu' } });
+  assert.equal(patch.status, 200);
+  assert.equal(patch.body.company.name, 'Güncellenmiş Geçici Firma');
+
+  // Geçici firmaya bir İSG uzmanı ata - company-roles yazma izni artık gecici_gorevlendirme_yonetimi
+  // için de açık olmalı (bkz. assertCanWrite).
+  const roleAdd = await api('POST', '/admin/company-roles', {
+    token: adminToken,
+    body: { companyId: tempCompanyId, roleType: 'ISG_UZMANI', source: 'DISARIDAN', outsideFullName: 'Geçici Firma Uzmanı' },
+  });
+  assert.equal(roleAdd.status, 201);
+
+  const del = await api('DELETE', `/admin/companies/${tempCompanyId}`, { token: adminToken });
+  assert.equal(del.status, 200);
+  const afterDelete = await api('GET', `/admin/companies/${tempCompanyId}`, { token: adminToken });
+  assert.equal(afterDelete.body.company.isActive, false);
 });

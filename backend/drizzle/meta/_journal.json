@@ -134,6 +134,20 @@
       "when": 1788339916784,
       "tag": "0018_employee_health_training_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1788520035048,
+      "tag": "0019_drop_employee_free_text_specialist_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1788520042072,
+      "tag": "0020_employee_specialist_assignment_links",
+      "breakpoints": true
     }
   ]
 }
