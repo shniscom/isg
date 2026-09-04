@@ -357,22 +357,35 @@ export function CompaniesPage() {
               {visibleTempCompanies.length === 0 && <p className="text-xs text-amber-700">Bu durumda firma yok.</p>}
               <div className="space-y-2">
                 {visibleTempCompanies.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => openTempCompany(c)}
-                    className="flex w-full items-center justify-between rounded-xl border border-amber-200 bg-surface p-3 text-left transition hover:border-amber-400"
-                  >
-                    <div>
-                      <div className="font-medium text-slate-800">{c.name}</div>
-                      <div className="text-xs text-slate-500">
-                        {c.summary?.employeeCount || 0} çalışan
-                        {c.sgkNumber ? ` · SGK: ${c.sgkNumber}` : ''}
-                        {c.scopeOfWork ? ` · ${c.scopeOfWork}` : ''}
+                  <div key={c.id} className="rounded-xl border border-amber-200 bg-surface p-3">
+                    <button type="button" onClick={() => openTempCompany(c)} className="flex w-full items-center justify-between text-left">
+                      <div>
+                        <div className="font-medium text-slate-800">{c.name}</div>
+                        <div className="text-xs text-slate-500">
+                          {c.summary?.employeeCount || 0} çalışan
+                          {c.sgkNumber ? ` · SGK: ${c.sgkNumber}` : ''}
+                          {c.scopeOfWork ? ` · ${c.scopeOfWork}` : ''}
+                        </div>
                       </div>
-                    </div>
-                    <span className="text-slate-300">›</span>
-                  </button>
+                      <span className="text-slate-300">›</span>
+                    </button>
+                    {canManageTemp && (
+                      <div className="mt-2 flex gap-3 border-t border-amber-100 pt-2 text-xs">
+                        <Link to={`/admin/firmalar/${c.id}`} className="font-medium text-brand-700 hover:underline">
+                          Detay / Düzenle / Uzman-Hekim-DSP Ata
+                        </Link>
+                        {c.isActive ? (
+                          <button type="button" onClick={() => handleDeactivate(c)} className="font-medium text-red-600 hover:underline">
+                            Sil
+                          </button>
+                        ) : (
+                          <button type="button" onClick={() => handleReactivate(c)} className="font-medium text-emerald-700 hover:underline">
+                            Aktifleştir
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 ))}
               </div>
 

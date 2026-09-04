@@ -1,22 +1,29 @@
 import * as XLSX from 'xlsx';
 
-// Gerçek şirket şablonuna göre Excel kolon sırası (A-N). İlk satır başlık kabul edilir,
-// veriler 2. satırdan başlar. B, C, D, E, F sütunları zorunludur.
+// Tetkik tarihi girildiğinde opsiyonel olarak hangi tetkiklerin yapıldığı seçilebilir (bkz.
+// çalışan formu "Tetkik Türleri" checkbox listesi ve Excel şablonu K sütunu). Sabit liste -
+// backend'de employees.medicalExamTypes (jsonb dizi) olarak, olduğu gibi (bu etiketlerle)
+// saklanır.
+export const MEDICAL_EXAM_TYPES = ['SFT', 'Tam Kan', 'Akciğer Grafisi', 'Kan Şekeri', 'EKG', 'Odyo', 'Göz', 'Tetanoz', 'Diğer'];
+
+// Sadeleştirilmiş Excel kolon sırası (A-L). İlk satır başlık kabul edilir, veriler 2. satırdan
+// başlar. B, C, D, E, F sütunları zorunludur. Eski şablondaki "Eğitim Kalan Gün" (zaten sistem
+// tarafından yeniden hesaplanıyordu), "İşe Başlama Eğitimi" ve "Sağlık Yetkilisi İmzası"
+// sütunları kaldırıldı - İSG uzmanı/işyeri hekimi/DSP artık firma kartındaki listeden seçiliyor
+// (bkz. lib EmployeesPage.jsx uzman/hekim seçim kutuları), Excel'den atanamıyor.
 export const EXCEL_COLUMNS = [
   { col: 'A', label: 'Sıra No', required: false, note: 'Bilgi amaçlı, sistem tarafından kullanılmaz.' },
   { col: 'B', label: 'TC Kimlik No', required: true, note: 'Zorunlu, 11 haneli.' },
   { col: 'C', label: 'İşe Giriş Tarihi', required: true, note: 'Zorunlu.' },
   { col: 'D', label: 'Adı', required: true, note: 'Zorunlu.' },
   { col: 'E', label: 'Soyadı', required: true, note: 'Zorunlu.' },
-  { col: 'F', label: 'SGK Görev / İş Kolu', required: true, note: 'Zorunlu. Örn: Beden İşçisi (İnşaat).' },
+  { col: 'F', label: 'Görevi', required: true, note: 'Zorunlu. SGK görev/iş kolu. Örn: Beden İşçisi (İnşaat).' },
   { col: 'G', label: 'Eğitim Aldığı Tarih', required: false, note: 'İSG eğitiminin verildiği tarih.' },
   { col: 'H', label: 'Eğitim Geçerlilik Tarihi', required: false, note: 'İSG eğitiminin süresinin dolacağı tarih; kalan gün kartlarda otomatik hesaplanır.' },
-  { col: 'I', label: 'Eğitim Kalan Gün', required: false, note: 'Bilgi amaçlı, sistem tarafından yeniden hesaplanıp dikkate alınmaz; boş bırakabilirsiniz.' },
-  { col: 'J', label: 'İşe Başlama Eğitimi', required: false, note: 'Serbest metin (ör. "ATAMA YOK").' },
-  { col: 'K', label: 'EK-2', required: false, note: 'Serbest metin/tarih.' },
-  { col: 'L', label: 'Tetkik', required: false, note: 'Tetkik tarihi; girilirse kalan gün kartlarda otomatik hesaplanır, boşsa "Yok" gösterilir.' },
-  { col: 'M', label: 'Sağlık Yetkilisi İmzası', required: false, note: 'Serbest metin (ör. "Var").' },
-  { col: 'N', label: 'İSG Görevi', required: false, note: 'Örn: Çalışan Temsilcisi.' },
+  { col: 'I', label: 'Ek-2 Tarihi', required: false, note: 'Periyodik muayene formu tarihi.' },
+  { col: 'J', label: 'Tetkik Tarihi', required: false, note: 'Girilirse kalan gün kartlarda otomatik hesaplanır, boşsa "Yok" gösterilir.' },
+  { col: 'K', label: 'Tetkik Türleri', required: false, note: `Virgülle ayrılmış (${MEDICAL_EXAM_TYPES.join(', ')}) - opsiyonel.` },
+  { col: 'L', label: 'İSG Görevi', required: false, note: 'Örn: Çalışan Temsilcisi.' },
 ];
 
 export const EXCEL_TEMPLATE_HEADER = [
@@ -25,14 +32,12 @@ export const EXCEL_TEMPLATE_HEADER = [
   'İşe Giriş Tarihi',
   'Adı',
   'Soyadı',
-  'SGK Görev / İş Kolu',
+  'Görevi',
   'Eğitim Aldığı Tarih',
   'Eğitim Geçerlilik Tarihi',
-  'Eğitim Kalan Gün',
-  'İşe Başlama Eğitimi',
-  'EK-2',
-  'Tetkik',
-  'Sağlık Yetkilisi İmzası',
+  'Ek-2 Tarihi',
+  'Tetkik Tarihi',
+  'Tetkik Türleri',
   'İSG Görevi',
 ];
 
@@ -45,11 +50,9 @@ const EXCEL_TEMPLATE_EXAMPLE_ROW = [
   'Beden İşçisi (İnşaat)',
   '15.05.2026',
   '15.05.2027',
-  '',
-  'ATAMA YOK',
   '01.01.2026',
   '20.08.2026',
-  'Var',
+  'SFT, Tam Kan, EKG',
   'Çalışan Temsilcisi',
 ];
 
@@ -64,11 +67,9 @@ export function downloadEmployeeExcelTemplate() {
     { wch: 20 },
     { wch: 16 },
     { wch: 18 },
-    { wch: 12 },
-    { wch: 16 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 16 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 28 },
     { wch: 18 },
   ];
   const workbook = XLSX.utils.book_new();
@@ -99,10 +100,24 @@ function excelDateToIso(value) {
   return text;
 }
 
+/** Serbest metindeki tetkik türü isimlerini (virgülle ayrılmış) MEDICAL_EXAM_TYPES listesindeki
+ * kanonik etiketlere eşler; listede olmayan bir değer büyük/küçük harf farkı gözetmeksizin
+ * olduğu gibi (kullanıcının yazdığı haliyle) korunur - böylece "diğer" bir tetkik türü de
+ * kaybolmadan kaydedilebilir. */
+function parseMedicalExamTypes(value) {
+  const text = cellText(value);
+  if (!text) return [];
+  return text
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => MEDICAL_EXAM_TYPES.find((t) => t.toLocaleLowerCase('tr') === s.toLocaleLowerCase('tr')) || s);
+}
+
 /**
- * Excel kolon sırası: sıra no, TC no, işe giriş tarihi, adı, soyadı, SGK görev/iş kolu,
- * eğitim aldığı tarih, eğitim geçerlilik tarihi, eğitim kalan gün (yok sayılır), işe başlama
- * eğitimi, EK-2, tetkik, sağlık yetkilisi imzası, İSG görevi. İlk satır başlık kabul edilir.
+ * Excel kolon sırası: sıra no, TC no, işe giriş tarihi, adı, soyadı, görevi, eğitim aldığı
+ * tarih, eğitim geçerlilik tarihi, Ek-2 tarihi, tetkik tarihi, tetkik türleri, İSG görevi.
+ * İlk satır başlık kabul edilir.
  */
 export async function parseEmployeeExcel(file) {
   const buf = await file.arrayBuffer();
@@ -119,11 +134,10 @@ export async function parseEmployeeExcel(file) {
       position: cellText(r[5]),
       isgTrainingDate: excelDateToIso(r[6]),
       isgTrainingExpiryDate: excelDateToIso(r[7]),
-      startWorkTrainingNote: cellText(r[9]),
-      ek2Note: excelDateToIso(r[10]),
-      medicalExamDate: excelDateToIso(r[11]),
-      healthAuthoritySignatureNote: cellText(r[12]),
-      isgRole: cellText(r[13]),
+      ek2Date: excelDateToIso(r[8]),
+      medicalExamDate: excelDateToIso(r[9]),
+      medicalExamTypes: parseMedicalExamTypes(r[10]),
+      isgRole: cellText(r[11]),
     }));
 }
 
@@ -159,4 +173,10 @@ export function trainingStatusChip(employee) {
 /** Çalışan kartlarında gösterilecek tetkik kalan süre rozeti. */
 export function medicalExamStatusChip(employee) {
   return chipFromDays('Tetkik', daysRemaining(employee.medicalExamDate));
+}
+
+/** Çalışan kartlarında gösterilecek Ek-2 kalan süre rozeti. */
+export function ek2StatusChip(employee) {
+  if (!employee.ek2Date) return { text: 'Ek-2: Yok', tone: 'default' };
+  return chipFromDays('Ek-2', daysRemaining(employee.ek2Date));
 }

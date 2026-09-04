@@ -4,7 +4,8 @@ import apiClient, { getErrorMessage } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { Card, Alert, Badge, Button, Input } from '../components/ui';
 import { STATUS_LABELS, STATUS_BADGE_VARIANT, PRIORITY_LABELS, PRIORITY_BADGE_VARIANT, formatDate } from '../lib/nonconformity';
-import { trainingStatusChip, medicalExamStatusChip } from '../lib/employee';
+import { trainingStatusChip, medicalExamStatusChip, ek2StatusChip, MEDICAL_EXAM_TYPES } from '../lib/employee';
+import { RoleAssignmentSelect } from '../components/RoleAssignmentSelect';
 
 const CHIP_TONE_CLASS = {
   default: 'bg-slate-100 text-slate-600',
@@ -79,10 +80,10 @@ export function EmployeeDetailPage() {
       ppeHandoverDocExists: !!data.employee.ppeHandoverDocExists,
       ek2Suitable: !!data.employee.ek2Suitable,
       ek2Date: toDateInput(data.employee.ek2Date),
-      healthAuthorityDoctorName: data.employee.healthAuthorityDoctorName || '',
-      healthAuthorityCertificateNo: data.employee.healthAuthorityCertificateNo || '',
-      isgTrainerName: data.employee.isgTrainerName || '',
-      isgTrainerCertificateNo: data.employee.isgTrainerCertificateNo || '',
+      isgSpecialistAssignmentId: data.employee.isgSpecialistAssignmentId || '',
+      physicianAssignmentId: data.employee.physicianAssignmentId || '',
+      dspAssignmentId: data.employee.dspAssignmentId || '',
+      medicalExamTypes: data.employee.medicalExamTypes || [],
     });
     setShowEdit(true);
   }
@@ -107,10 +108,10 @@ export function EmployeeDetailPage() {
         startDate: editForm.startDate || null,
         ek2Suitable: editForm.ek2Suitable,
         ek2Date: editForm.ek2Date || null,
-        healthAuthorityDoctorName: editForm.healthAuthorityDoctorName.trim() || null,
-        healthAuthorityCertificateNo: editForm.healthAuthorityCertificateNo.trim() || null,
-        isgTrainerName: editForm.isgTrainerName.trim() || null,
-        isgTrainerCertificateNo: editForm.isgTrainerCertificateNo.trim() || null,
+        isgSpecialistAssignmentId: editForm.isgSpecialistAssignmentId || null,
+        physicianAssignmentId: editForm.physicianAssignmentId || null,
+        dspAssignmentId: editForm.dspAssignmentId || null,
+        medicalExamTypes: editForm.medicalExamTypes,
       };
       if (isTemp) {
         payload.endDate = editForm.endDate || null;
@@ -178,6 +179,7 @@ export function EmployeeDetailPage() {
   const { employee, nonconformities } = data;
   const trainingChip = trainingStatusChip(employee);
   const medicalChip = medicalExamStatusChip(employee);
+  const ek2Chip = ek2StatusChip(employee);
   // Yeniden işe alım: en son çıkış tarihi kayıtlıysa ve mevcut giriş tarihi o çıkıştan sonraysa
   // (yani aradan bir çıkış geçip yeniden aktif edilmişse) "ilk giriş / çıkış / yeniden giriş"
   // bilgisini birlikte gösteririz - bkz. backend schema.js employees.lastExitDate yorumu.
@@ -210,6 +212,7 @@ export function EmployeeDetailPage() {
         <div className="flex flex-wrap gap-1.5">
           <StatusChip chip={trainingChip} />
           <StatusChip chip={medicalChip} />
+          <StatusChip chip={ek2Chip} />
           {employee.isgRole && <span className="rounded-full bg-purple-100 px-2.5 py-1 text-xs font-medium text-purple-700">🦺 İSG Görevi: {employee.isgRole}</span>}
           {employee.mykCertificateNo && <span className="rounded-full bg-teal-100 px-2.5 py-1 text-xs font-medium text-teal-700">🎓 MYK: {employee.mykCertificateNo}</span>}
         </div>
@@ -289,16 +292,30 @@ export function EmployeeDetailPage() {
               <span className="text-slate-400">Ek-2 Tarihi:</span> {formatDate(employee.ek2Date)}
             </div>
           )}
-          {employee.healthAuthorityDoctorName && (
+          {employee.medicalExamTypes && employee.medicalExamTypes.length > 0 && (
             <div>
-              <span className="text-slate-400">İşyeri Hekimi:</span> {employee.healthAuthorityDoctorName}
-              {employee.healthAuthorityCertificateNo ? ` (Sertifika: ${employee.healthAuthorityCertificateNo})` : ''}
+              <span className="text-slate-400">Yapılan Tetkikler:</span> {employee.medicalExamTypes.join(', ')}
             </div>
           )}
-          {employee.isgTrainerName && (
+          {employee.physicianAssignment && (
             <div>
-              <span className="text-slate-400">İSG Uzmanı:</span> {employee.isgTrainerName}
-              {employee.isgTrainerCertificateNo ? ` (Sertifika: ${employee.isgTrainerCertificateNo})` : ''}
+              <span className="text-slate-400">İşyeri Hekimi:</span> {employee.physicianAssignment.fullName}
+              {employee.physicianAssignment.certificateNo ? ` (Sertifika: ${employee.physicianAssignment.certificateNo})` : ''}
+              {employee.physicianAssignment.certificateEndDate ? ' — Ayrıldı' : ''}
+            </div>
+          )}
+          {employee.isgSpecialistAssignment && (
+            <div>
+              <span className="text-slate-400">İSG Uzmanı:</span> {employee.isgSpecialistAssignment.fullName}
+              {employee.isgSpecialistAssignment.certificateClass ? ` (${employee.isgSpecialistAssignment.certificateClass})` : ''}
+              {employee.isgSpecialistAssignment.certificateNo ? ` Sertifika: ${employee.isgSpecialistAssignment.certificateNo}` : ''}
+              {employee.isgSpecialistAssignment.certificateEndDate ? ' — Ayrıldı' : ''}
+            </div>
+          )}
+          {employee.dspAssignment && (
+            <div>
+              <span className="text-slate-400">DSP:</span> {employee.dspAssignment.fullName}
+              {employee.dspAssignment.certificateEndDate ? ' — Ayrıldı' : ''}
             </div>
           )}
         </div>
@@ -424,25 +441,53 @@ export function EmployeeDetailPage() {
               />
               Ek-2 formuna göre işe uygun
             </label>
-            <Input
-              label="İşyeri Hekimi Ad Soyad"
-              value={editForm.healthAuthorityDoctorName}
-              onChange={(e) => setEditForm((f) => ({ ...f, healthAuthorityDoctorName: e.target.value }))}
+            {editForm.medicalExamDate && (
+              <div>
+                <span className="mb-1.5 block text-sm font-medium text-slate-700">Tetkik Türleri</span>
+                <div className="flex flex-wrap gap-2">
+                  {MEDICAL_EXAM_TYPES.map((t) => {
+                    const checked = editForm.medicalExamTypes.includes(t);
+                    return (
+                      <label key={t} className={`cursor-pointer rounded-full border px-2.5 py-1 text-xs ${checked ? 'border-brand-600 bg-brand-50 text-brand-800' : 'border-slate-300 text-slate-600'}`}>
+                        <input
+                          type="checkbox"
+                          className="hidden"
+                          checked={checked}
+                          onChange={() =>
+                            setEditForm((f) => ({
+                              ...f,
+                              medicalExamTypes: checked ? f.medicalExamTypes.filter((x) => x !== t) : [...f.medicalExamTypes, t],
+                            }))
+                          }
+                        />
+                        {checked ? '✓ ' : ''}
+                        {t}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            <RoleAssignmentSelect
+              companyId={data.employee.companyId}
+              roleType="ISYERI_HEKIMI"
+              label="İşyeri Hekimi"
+              value={editForm.physicianAssignmentId}
+              onChange={(id) => setEditForm((f) => ({ ...f, physicianAssignmentId: id }))}
             />
-            <Input
-              label="İşyeri Hekimi Sertifika No"
-              value={editForm.healthAuthorityCertificateNo}
-              onChange={(e) => setEditForm((f) => ({ ...f, healthAuthorityCertificateNo: e.target.value }))}
+            <RoleAssignmentSelect
+              companyId={data.employee.companyId}
+              roleType="ISG_UZMANI"
+              label="İSG Uzmanı (eğitimi veren)"
+              value={editForm.isgSpecialistAssignmentId}
+              onChange={(id) => setEditForm((f) => ({ ...f, isgSpecialistAssignmentId: id }))}
             />
-            <Input
-              label="İSG Uzmanı Ad Soyad"
-              value={editForm.isgTrainerName}
-              onChange={(e) => setEditForm((f) => ({ ...f, isgTrainerName: e.target.value }))}
-            />
-            <Input
-              label="İSG Uzmanı Sertifika No"
-              value={editForm.isgTrainerCertificateNo}
-              onChange={(e) => setEditForm((f) => ({ ...f, isgTrainerCertificateNo: e.target.value }))}
+            <RoleAssignmentSelect
+              companyId={data.employee.companyId}
+              roleType="DIGER_SAGLIK_PERSONELI"
+              label="DSP (Diğer Sağlık Personeli)"
+              value={editForm.dspAssignmentId}
+              onChange={(id) => setEditForm((f) => ({ ...f, dspAssignmentId: id }))}
             />
             {isTemp && (
               <div className="space-y-2.5 rounded-lg border border-amber-200 bg-amber-50 p-2.5">

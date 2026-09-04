@@ -89,7 +89,6 @@ function SingleFileUploader({ onUploaded, label = 'Dosya Yükle (Fotoğraf/PDF)'
 export function CompanyDetailPage() {
   const { id } = useParams();
   const { hasPermission } = useAuth();
-  const canManage = hasPermission('firma_yonetme');
   const [detail, setDetail] = useState(null);
   const [employees, setEmployees] = useState([]);
   const [equipmentList, setEquipmentList] = useState(null);
@@ -135,6 +134,12 @@ export function CompanyDetailPage() {
   if (!detail) return <p className="text-sm text-slate-500">Yükleniyor...</p>;
 
   const { company, blocks, roleAssignments, incidents, documents, boardMeetings, boardStatus, equipmentCount, mykStats, penalties } = detail;
+  // Normalde firma düzenleme 'firma_yonetme' gerektirir. Ancak geçici görevlendirme firmaları
+  // (company.isTemporaryAssignment=true) için 'gecici_gorevlendirme_yonetimi' yetkisi de yeterlidir
+  // - backend (companies.routes.js / company-roles.routes.js) aynı dallanmayı zaten uyguluyor,
+  // buradaki canManage de ona uygun hesaplanmalı, aksi halde bu yetkiye sahip kullanıcılar
+  // firma detayında hiçbir şeyi düzenleyemez/rol atayamaz.
+  const canManage = hasPermission('firma_yonetme') || (company.isTemporaryAssignment && hasPermission('gecici_gorevlendirme_yonetimi'));
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
@@ -144,7 +149,11 @@ export function CompanyDetailPage() {
             ← Firmalar
           </Link>
           <h1 className="mt-1 text-2xl font-bold text-slate-800">{company.name}</h1>
-          <p className="text-sm text-slate-500">{COMPANY_TYPE_LABELS[company.type]}</p>
+          <p className="flex flex-wrap items-center gap-1.5 text-sm text-slate-500">
+            <span>{COMPANY_TYPE_LABELS[company.type]}</span>
+            {company.isTemporaryAssignment && <Badge variant="warning">🕐 Geçici Görevlendirme</Badge>}
+            {!company.isActive && <Badge variant="danger">Pasif</Badge>}
+          </p>
         </div>
       </div>
 
@@ -225,7 +234,15 @@ function StatCard({ label, value, tone = 'default' }) {
 }
 
 function GenelTab({ company, blocks, projectBlocks, mykStats, penalties, incidents, equipmentCount, canManage, onUpdated, onBlocksUpdated, setError, setNotice }) {
-  const [form, setForm] = useState({ requiresBoard: company.requiresBoard, dangerClass: company.dangerClass || '' });
+  const [form, setForm] = useState({
+    name: company.name || '',
+    taxNumber: company.taxNumber || '',
+    sgkNumber: company.sgkNumber || '',
+    phone: company.phone || '',
+    scopeOfWork: company.scopeOfWork || '',
+    requiresBoard: company.requiresBoard,
+    dangerClass: company.dangerClass || '',
+  });
   const [saving, setSaving] = useState(false);
   const [blockIds, setBlockIds] = useState((blocks || []).map((b) => b.id));
   const [savingBlocks, setSavingBlocks] = useState(false);
@@ -258,6 +275,11 @@ function GenelTab({ company, blocks, projectBlocks, mykStats, penalties, inciden
     setError(null);
     try {
       const { data } = await apiClient.patch(`/admin/companies/${company.id}`, {
+        name: form.name,
+        taxNumber: form.taxNumber || null,
+        sgkNumber: form.sgkNumber || null,
+        phone: form.phone || null,
+        scopeOfWork: form.scopeOfWork || null,
         requiresBoard: form.requiresBoard,
         dangerClass: form.dangerClass || null,
       });
@@ -274,16 +296,73 @@ function GenelTab({ company, blocks, projectBlocks, mykStats, penalties, inciden
     }
   }
 
+  async function handleArchiveToggle() {
+    setError(null);
+    setNotice(null);
+    try {
+      if (company.isActive) {
+        const { data } = await apiClient.delete(`/admin/companies/${company.id}`);
+        if (data.queued) setNotice('Firmanın pasife alınması admin onayına gönderildi.');
+        else {
+          onUpdated({ ...company, isActive: false });
+          setNotice('Firma pasife alındı.');
+        }
+      } else {
+        const { data } = await apiClient.patch(`/admin/companies/${company.id}`, { isActive: true });
+        if (data.queued) setNotice('Firmanın yeniden aktifleştirilmesi admin onayına gönderildi.');
+        else {
+          onUpdated(data.company);
+          setNotice('Firma yeniden aktifleştirildi.');
+        }
+      }
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
+  }
+
   const mykRatio = mykStats.total > 0 ? `${mykStats.withCertificate}/${mykStats.total}` : '0/0';
 
   return (
     <div className="space-y-4">
+      {!company.isActive && <Alert variant="warning">Bu firma pasif durumda.</Alert>}
+
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label="MYK Belgeli Çalışan" value={mykRatio} tone={mykStats.withCertificate > 0 ? 'success' : 'default'} />
         <StatCard label="Kaza" value={incidents.counts.kazaCount} tone={incidents.counts.kazaCount > 0 ? 'danger' : 'default'} />
         <StatCard label="Ramak Kala" value={incidents.counts.ramakKalaCount} tone={incidents.counts.ramakKalaCount > 0 ? 'warning' : 'default'} />
         <StatCard label="Ekipman" value={equipmentCount} />
       </div>
+
+      <Card>
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="font-semibold text-slate-800">Firma Bilgileri</h3>
+          {canManage && (
+            <button
+              type="button"
+              onClick={handleArchiveToggle}
+              className={`text-xs font-medium ${company.isActive ? 'text-red-600 hover:underline' : 'text-emerald-700 hover:underline'}`}
+            >
+              {company.isActive ? 'Firmayı Pasife Al (Sil)' : 'Firmayı Yeniden Aktifleştir'}
+            </button>
+          )}
+        </div>
+        {canManage ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Input label="Firma Adı" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+            <Input label="Telefon" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} />
+            <Input label="Vergi Numarası" value={form.taxNumber} onChange={(e) => setForm((f) => ({ ...f, taxNumber: e.target.value }))} />
+            <Input label="SGK Sicil Numarası" value={form.sgkNumber} onChange={(e) => setForm((f) => ({ ...f, sgkNumber: e.target.value }))} />
+            <Input label="Sahada Yaptığı İş / İş Kolu" value={form.scopeOfWork} onChange={(e) => setForm((f) => ({ ...f, scopeOfWork: e.target.value }))} />
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+            <div><span className="text-slate-500">Telefon:</span> {company.phone || '-'}</div>
+            <div><span className="text-slate-500">Vergi No:</span> {company.taxNumber || '-'}</div>
+            <div><span className="text-slate-500">SGK No:</span> {company.sgkNumber || '-'}</div>
+            <div><span className="text-slate-500">İş Kolu:</span> {company.scopeOfWork || '-'}</div>
+          </div>
+        )}
+      </Card>
 
       <Card>
         <h3 className="mb-3 font-semibold text-slate-800">Sorumlu Olduğu Bölgeler</h3>
@@ -351,8 +430,19 @@ function GenelTab({ company, blocks, projectBlocks, mykStats, penalties, inciden
       </Card>
 
       <Card>
-        <h3 className="mb-3 font-semibold text-slate-800">İSG Kurulu Ayarları</h3>
+        <h3 className="mb-3 font-semibold text-slate-800">Tehlike Sınıfı ve İSG Kurulu</h3>
         <div className="space-y-3">
+          <Select label="Tehlike Sınıfı" value={form.dangerClass} disabled={!canManage} onChange={(e) => setForm((f) => ({ ...f, dangerClass: e.target.value }))}>
+            <option value="">Seçilmedi</option>
+            {Object.entries(DANGER_CLASS_LABELS).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v}
+              </option>
+            ))}
+          </Select>
+          <p className="text-xs text-slate-500">
+            Tehlike sınıfı, İSG kurulu zorunluluğundan bağımsız olarak, eğitim/tetkik/Ek-2 süresi dolma bildirimlerinin doğru hesaplanabilmesi için de kullanılır.
+          </p>
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input
               type="checkbox"
@@ -362,16 +452,6 @@ function GenelTab({ company, blocks, projectBlocks, mykStats, penalties, inciden
             />
             Bu firma için İSG kurulu kurulması gerekiyor
           </label>
-          {form.requiresBoard && (
-            <Select label="Tehlike Sınıfı" value={form.dangerClass} disabled={!canManage} onChange={(e) => setForm((f) => ({ ...f, dangerClass: e.target.value }))}>
-              <option value="">Seçiniz</option>
-              {Object.entries(DANGER_CLASS_LABELS).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
-              ))}
-            </Select>
-          )}
           {canManage && (
             <Button onClick={handleSave} disabled={saving}>
               {saving ? 'Kaydediliyor...' : 'Kaydet'}
@@ -383,46 +463,94 @@ function GenelTab({ company, blocks, projectBlocks, mykStats, penalties, inciden
   );
 }
 
+const EMPTY_ROLE_FORM = {
+  roleType: '',
+  source: 'CALISAN',
+  employeeId: '',
+  outsideFullName: '',
+  outsideCompanyName: '',
+  outsideNationalId: '',
+  outsidePhone: '',
+  certificateNo: '',
+  certificateClass: '',
+  certificateStartDate: '',
+  certificateEndDate: '',
+};
+
+const ISG_UZMANI_CLASSES = ['A Sınıfı', 'B Sınıfı', 'C Sınıfı'];
+
 function RollerTab({ companyId, roles, employees, roleTypes, canManage, onChange, setError, setNotice }) {
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const roleLabel = (key) => roleTypes.find((rt) => rt.key === key)?.label || key;
   const firmaRolleri = roleTypes.filter((rt) => rt.category === 'FIRMA_ROLU');
   const acilEkipleri = roleTypes.filter((rt) => rt.category === 'ACIL_EKIP');
-  const [form, setForm] = useState({
-    roleType: '',
-    source: 'CALISAN',
-    employeeId: '',
-    outsideFullName: '',
-    outsideCompanyName: '',
-    outsideNationalId: '',
-    outsidePhone: '',
-    certificateNo: '',
-    certificateClass: '',
-    certificateStartDate: '',
-    certificateEndDate: '',
-  });
+  const [form, setForm] = useState(EMPTY_ROLE_FORM);
   const [submitting, setSubmitting] = useState(false);
 
   // Rol kataloğu yüklenince (veya değişince), formdaki seçili rolün hâlâ geçerli olduğundan
   // emin ol; değilse ilk seçeneğe düş - Görevler sayfasından yeni bir rol eklenip silinmiş
   // olabileceği için bu form aynı sekmede uzun süre açık kalırsa da tutarlı kalır.
   useEffect(() => {
-    if (roleTypes.length === 0) return;
+    if (roleTypes.length === 0 || editingId) return;
     if (!roleTypes.some((rt) => rt.key === form.roleType)) {
       setForm((f) => ({ ...f, roleType: roleTypes[0].key }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roleTypes]);
 
+  function openAddForm() {
+    setEditingId(null);
+    setForm({ ...EMPTY_ROLE_FORM, roleType: roleTypes[0]?.key || '' });
+    setShowForm(true);
+  }
+
+  function openEditForm(r) {
+    setEditingId(r.id);
+    setForm({
+      roleType: r.roleType,
+      source: r.source,
+      employeeId: r.employeeId || '',
+      outsideFullName: r.outsideFullName || '',
+      outsideCompanyName: r.outsideCompanyName || '',
+      outsideNationalId: r.outsideNationalId || '',
+      outsidePhone: r.outsidePhone || '',
+      certificateNo: r.certificateNo || '',
+      certificateClass: r.certificateClass || '',
+      certificateStartDate: r.certificateStartDate ? toInputDate(r.certificateStartDate) : '',
+      certificateEndDate: r.certificateEndDate ? toInputDate(r.certificateEndDate) : '',
+    });
+    setShowForm(true);
+  }
+
+  function closeForm() {
+    setShowForm(false);
+    setEditingId(null);
+    setForm(EMPTY_ROLE_FORM);
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
     try {
-      await apiClient.post('/admin/company-roles', { companyId, ...form });
-      setShowForm(false);
-      setForm((f) => ({ ...f, employeeId: '', outsideFullName: '', outsideCompanyName: '', outsideNationalId: '', outsidePhone: '', certificateNo: '', certificateClass: '', certificateStartDate: '', certificateEndDate: '' }));
-      setNotice('Rol eklendi.');
+      if (editingId) {
+        await apiClient.patch(`/admin/company-roles/${editingId}`, {
+          outsideFullName: form.outsideFullName,
+          outsideCompanyName: form.outsideCompanyName,
+          outsideNationalId: form.outsideNationalId,
+          outsidePhone: form.outsidePhone,
+          certificateNo: form.certificateNo,
+          certificateClass: form.certificateClass,
+          certificateStartDate: form.certificateStartDate,
+          certificateEndDate: form.certificateEndDate,
+        });
+        setNotice('Rol kaydı güncellendi.');
+      } else {
+        await apiClient.post('/admin/company-roles', { companyId, ...form });
+        setNotice('Rol eklendi.');
+      }
+      closeForm();
       onChange();
     } catch (err) {
       setError(getErrorMessage(err));
@@ -441,41 +569,72 @@ function RollerTab({ companyId, roles, employees, roleTypes, canManage, onChange
     }
   }
 
+  // Görevden ayrılan bir uzman/hekim/DSP için hızlıca "bugün itibarıyla çıkış" işaretlemek üzere -
+  // kayıt silinmez (geçmişte kalır), sadece bitiş tarihi girilir; ardından "+ Rol Ekle" ile yeni
+  // gelen kişi için taze bir kayıt açılabilir (bkz. kullanıcı isteği: "yeni gelen uzman için
+  // yeniden bu işlemin yapılması lazım").
+  async function handleQuickExit(r) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (!window.confirm(`${roleLabel(r.roleType)} - ${r.source === 'CALISAN' ? r.employeeFullName : r.outsideFullName} için bugünün tarihiyle (${formatDate(today)}) çıkış işlensin mi?`)) return;
+    try {
+      await apiClient.patch(`/admin/company-roles/${r.id}`, { certificateEndDate: today });
+      setNotice('Çıkış tarihi girildi.');
+      onChange();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
+  }
+
   function RoleGroup({ title, types }) {
     const typeKeys = new Set(types.map((t) => t.key));
     const rows = roles.filter((r) => typeKeys.has(r.roleType));
+    const now = new Date();
     return (
       <Card>
         <h3 className="mb-3 font-semibold text-slate-800">{title}</h3>
         {rows.length === 0 && <p className="text-sm text-slate-500">Henüz kayıt yok.</p>}
         <div className="space-y-2">
-          {rows.map((r) => (
-            <div key={r.id} className="rounded-lg bg-slate-50 px-3 py-2 text-sm">
-              <div className="flex items-center justify-between">
-                <div>
-                  <Badge variant="purple">{roleLabel(r.roleType)}</Badge>
-                  <span className="ml-2 font-medium text-slate-800">
-                    {r.source === 'CALISAN' ? r.employeeFullName : r.outsideFullName}
-                  </span>
-                  {r.source === 'DISARIDAN' && r.outsideCompanyName && (
-                    <span className="ml-1 text-xs text-slate-500">({r.outsideCompanyName})</span>
+          {rows.map((r) => {
+            const isPast = r.certificateEndDate && new Date(r.certificateEndDate) < now;
+            return (
+              <div key={r.id} className={`rounded-lg px-3 py-2 text-sm ${isPast ? 'bg-slate-50 opacity-70' : 'bg-slate-50'}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <Badge variant="purple">{roleLabel(r.roleType)}</Badge>
+                    {isPast && <Badge variant="default">Pasif</Badge>}
+                    <span className="ml-2 font-medium text-slate-800">
+                      {r.source === 'CALISAN' ? r.employeeFullName : r.outsideFullName}
+                    </span>
+                    {r.source === 'DISARIDAN' && r.outsideCompanyName && (
+                      <span className="ml-1 text-xs text-slate-500">({r.outsideCompanyName})</span>
+                    )}
+                  </div>
+                  {canManage && (
+                    <div className="flex shrink-0 gap-2 text-xs">
+                      {!r.certificateEndDate && (
+                        <button onClick={() => handleQuickExit(r)} className="text-amber-700 hover:underline">
+                          Çıkış Ver
+                        </button>
+                      )}
+                      <button onClick={() => openEditForm(r)} className="text-brand-700 hover:underline">
+                        Düzenle
+                      </button>
+                      <button onClick={() => handleDelete(r.id)} className="text-red-600 hover:underline">
+                        Sil
+                      </button>
+                    </div>
                   )}
                 </div>
-                {canManage && (
-                  <button onClick={() => handleDelete(r.id)} className="text-xs text-red-600 hover:underline">
-                    Sil
-                  </button>
+                {(r.certificateNo || r.certificateClass || r.certificateStartDate) && (
+                  <div className="mt-1 text-xs text-slate-500">
+                    {r.certificateNo && <>Belge No: {r.certificateNo} · </>}
+                    {r.certificateClass && <>{r.certificateClass} · </>}
+                    {r.certificateStartDate && <>{formatDate(r.certificateStartDate)} - {r.certificateEndDate ? formatDate(r.certificateEndDate) : 'Aktif'}</>}
+                  </div>
                 )}
               </div>
-              {(r.certificateNo || r.certificateClass || r.certificateStartDate) && (
-                <div className="mt-1 text-xs text-slate-500">
-                  {r.certificateNo && <>Belge No: {r.certificateNo} · </>}
-                  {r.certificateClass && <>{r.certificateClass} · </>}
-                  {r.certificateStartDate && <>{formatDate(r.certificateStartDate)} - {formatDate(r.certificateEndDate)}</>}
-                </div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </Card>
     );
@@ -487,13 +646,14 @@ function RollerTab({ companyId, roles, employees, roleTypes, canManage, onChange
       <RoleGroup title="Acil Durum Ekipleri" types={acilEkipleri} />
 
       {!canManage ? null : !showForm ? (
-        <Button variant="secondary" onClick={() => setShowForm(true)}>
+        <Button variant="secondary" onClick={openAddForm}>
           + Rol Ekle
         </Button>
       ) : (
         <Card>
           <form onSubmit={handleSubmit} className="space-y-3">
-            <Select label="Rol" value={form.roleType} onChange={(e) => setForm((f) => ({ ...f, roleType: e.target.value }))}>
+            <h4 className="font-medium text-slate-800">{editingId ? 'Rol Kaydını Düzenle' : 'Yeni Rol Ekle'}</h4>
+            <Select label="Rol" value={form.roleType} disabled={!!editingId} onChange={(e) => setForm((f) => ({ ...f, roleType: e.target.value }))}>
               <optgroup label="Firma Rolleri">
                 {firmaRolleri.map((t) => (
                   <option key={t.key} value={t.key}>
@@ -509,18 +669,28 @@ function RollerTab({ companyId, roles, employees, roleTypes, canManage, onChange
                 ))}
               </optgroup>
             </Select>
-            <Select label="Kaynak" value={form.source} onChange={(e) => setForm((f) => ({ ...f, source: e.target.value }))}>
-              <option value="CALISAN">Firma çalışanlarından</option>
-              <option value="DISARIDAN">Dışarıdan (OSGB vb.)</option>
-            </Select>
-            {form.source === 'CALISAN' ? (
-              <div className="space-y-1.5">
-                <span className="mb-1.5 block text-sm font-medium text-slate-700">Çalışan</span>
-                <EmployeeCombobox employees={employees} value={form.employeeId} onChange={(id) => setForm((f) => ({ ...f, employeeId: id }))} />
-              </div>
+            {editingId ? (
+              <p className="text-xs text-slate-500">
+                {form.source === 'CALISAN' ? employees.find((e) => e.id === form.employeeId)?.fullName || 'Firma çalışanı' : form.outsideFullName}
+              </p>
             ) : (
               <>
-                <Input label="Ad Soyad" value={form.outsideFullName} onChange={(e) => setForm((f) => ({ ...f, outsideFullName: e.target.value }))} />
+                <Select label="Kaynak" value={form.source} onChange={(e) => setForm((f) => ({ ...f, source: e.target.value }))}>
+                  <option value="CALISAN">Firma çalışanlarından</option>
+                  <option value="DISARIDAN">Dışarıdan (OSGB vb.)</option>
+                </Select>
+                {form.source === 'CALISAN' ? (
+                  <div className="space-y-1.5">
+                    <span className="mb-1.5 block text-sm font-medium text-slate-700">Çalışan</span>
+                    <EmployeeCombobox employees={employees} value={form.employeeId} onChange={(id) => setForm((f) => ({ ...f, employeeId: id }))} />
+                  </div>
+                ) : (
+                  <Input label="Ad Soyad" value={form.outsideFullName} onChange={(e) => setForm((f) => ({ ...f, outsideFullName: e.target.value }))} />
+                )}
+              </>
+            )}
+            {(editingId ? form.source === 'DISARIDAN' : form.source === 'DISARIDAN') && (
+              <>
                 <Input label="Firma (ör. OSGB adı)" value={form.outsideCompanyName} onChange={(e) => setForm((f) => ({ ...f, outsideCompanyName: e.target.value }))} />
                 <div className="grid grid-cols-2 gap-3">
                   <Input label="T.C. Kimlik No" value={form.outsideNationalId} onChange={(e) => setForm((f) => ({ ...f, outsideNationalId: e.target.value }))} />
@@ -530,17 +700,28 @@ function RollerTab({ companyId, roles, employees, roleTypes, canManage, onChange
             )}
             <div className="grid grid-cols-2 gap-3">
               <Input label="Sertifika/Belge No" value={form.certificateNo} onChange={(e) => setForm((f) => ({ ...f, certificateNo: e.target.value }))} />
-              <Input label="Sınıf (ör. B Sınıfı)" value={form.certificateClass} onChange={(e) => setForm((f) => ({ ...f, certificateClass: e.target.value }))} />
+              {form.roleType === 'ISG_UZMANI' ? (
+                <Select label="Sınıf" value={form.certificateClass} onChange={(e) => setForm((f) => ({ ...f, certificateClass: e.target.value }))}>
+                  <option value="">Seçilmedi</option>
+                  {ISG_UZMANI_CLASSES.map((cls) => (
+                    <option key={cls} value={cls}>
+                      {cls}
+                    </option>
+                  ))}
+                </Select>
+              ) : (
+                <Input label="Sınıf (varsa)" value={form.certificateClass} onChange={(e) => setForm((f) => ({ ...f, certificateClass: e.target.value }))} />
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Input label="Sertifika Başlangıç" type="date" value={form.certificateStartDate ? toInputDate(form.certificateStartDate) : ''} onChange={(e) => setForm((f) => ({ ...f, certificateStartDate: e.target.value }))} />
-              <Input label="Sertifika Bitiş" type="date" value={form.certificateEndDate ? toInputDate(form.certificateEndDate) : ''} onChange={(e) => setForm((f) => ({ ...f, certificateEndDate: e.target.value }))} />
+              <Input label="Atama/Başlangıç Tarihi" type="date" value={form.certificateStartDate} onChange={(e) => setForm((f) => ({ ...f, certificateStartDate: e.target.value }))} />
+              <Input label="Çıkış Tarihi (varsa)" type="date" value={form.certificateEndDate} onChange={(e) => setForm((f) => ({ ...f, certificateEndDate: e.target.value }))} />
             </div>
             <div className="flex gap-2">
               <Button type="submit" disabled={submitting}>
-                {submitting ? 'Ekleniyor...' : 'Ekle'}
+                {submitting ? 'Kaydediliyor...' : editingId ? 'Güncelle' : 'Ekle'}
               </Button>
-              <Button type="button" variant="secondary" onClick={() => setShowForm(false)}>
+              <Button type="button" variant="secondary" onClick={closeForm}>
                 Vazgeç
               </Button>
             </div>

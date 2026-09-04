@@ -10,7 +10,10 @@ import {
   downloadEmployeeExcelTemplate,
   trainingStatusChip,
   medicalExamStatusChip,
+  ek2StatusChip,
+  MEDICAL_EXAM_TYPES,
 } from '../lib/employee';
+import { RoleAssignmentSelect } from '../components/RoleAssignmentSelect';
 
 const SORT_OPTIONS = [
   { value: 'fullName', label: 'İsme Göre (A-Z)' },
@@ -44,15 +47,15 @@ const EMPTY_TEMP_EMPLOYEE = {
   sgkEntryDocExists: false,
   isgTrainingDate: '',
   isgTrainingExpiryDate: '',
-  isgTrainerName: '',
-  isgTrainerCertificateNo: '',
+  isgSpecialistAssignmentId: '',
   orientationTrainingDate: '',
   ppeHandoverDocExists: false,
   medicalExamDate: '',
+  medicalExamTypes: [],
   ek2Suitable: false,
   ek2Date: '',
-  healthAuthorityDoctorName: '',
-  healthAuthorityCertificateNo: '',
+  physicianAssignmentId: '',
+  dspAssignmentId: '',
   mykCertificateNo: '',
 };
 
@@ -342,15 +345,15 @@ export function EmployeesPage() {
         sgkEntryDocExists: tempEmployeeForm.sgkEntryDocExists,
         isgTrainingDate: tempEmployeeForm.isgTrainingDate || null,
         isgTrainingExpiryDate: tempEmployeeForm.isgTrainingExpiryDate || null,
-        isgTrainerName: tempEmployeeForm.isgTrainerName.trim() || null,
-        isgTrainerCertificateNo: tempEmployeeForm.isgTrainerCertificateNo.trim() || null,
+        isgSpecialistAssignmentId: tempEmployeeForm.isgSpecialistAssignmentId || null,
         orientationTrainingDate: tempEmployeeForm.orientationTrainingDate || null,
         ppeHandoverDocExists: tempEmployeeForm.ppeHandoverDocExists,
         medicalExamDate: tempEmployeeForm.medicalExamDate || null,
+        medicalExamTypes: tempEmployeeForm.medicalExamTypes,
         ek2Suitable: tempEmployeeForm.ek2Suitable,
         ek2Date: tempEmployeeForm.ek2Date || null,
-        healthAuthorityDoctorName: tempEmployeeForm.healthAuthorityDoctorName.trim() || null,
-        healthAuthorityCertificateNo: tempEmployeeForm.healthAuthorityCertificateNo.trim() || null,
+        physicianAssignmentId: tempEmployeeForm.physicianAssignmentId || null,
+        dspAssignmentId: tempEmployeeForm.dspAssignmentId || null,
         mykCertificateNo: tempEmployeeForm.mykCertificateNo.trim() || null,
       };
       if (user?.isSystemAdmin) payload.projectId = activeProjectId;
@@ -896,18 +899,13 @@ export function EmployeesPage() {
             value={tempEmployeeForm.isgTrainingExpiryDate}
             onChange={(e) => setTempEmployeeForm((f) => ({ ...f, isgTrainingExpiryDate: e.target.value }))}
           />
-          <div className="grid grid-cols-2 gap-2">
-            <Input
-              label="İSG Uzmanı Ad Soyad"
-              value={tempEmployeeForm.isgTrainerName}
-              onChange={(e) => setTempEmployeeForm((f) => ({ ...f, isgTrainerName: e.target.value }))}
-            />
-            <Input
-              label="İSG Uzmanı Sertifika No"
-              value={tempEmployeeForm.isgTrainerCertificateNo}
-              onChange={(e) => setTempEmployeeForm((f) => ({ ...f, isgTrainerCertificateNo: e.target.value }))}
-            />
-          </div>
+          <RoleAssignmentSelect
+            companyId={selectedCompany?.id}
+            roleType="ISG_UZMANI"
+            label="İSG Uzmanı (eğitimi veren)"
+            value={tempEmployeeForm.isgSpecialistAssignmentId}
+            onChange={(id) => setTempEmployeeForm((f) => ({ ...f, isgSpecialistAssignmentId: id }))}
+          />
           <Input
             label="Oryantasyon Eğitim Tarihi"
             type="date"
@@ -920,6 +918,33 @@ export function EmployeesPage() {
             value={tempEmployeeForm.medicalExamDate}
             onChange={(e) => setTempEmployeeForm((f) => ({ ...f, medicalExamDate: e.target.value }))}
           />
+          {tempEmployeeForm.medicalExamDate && (
+            <div>
+              <span className="mb-1.5 block text-sm font-medium text-slate-700">Tetkik Türleri</span>
+              <div className="flex flex-wrap gap-2">
+                {MEDICAL_EXAM_TYPES.map((t) => {
+                  const checked = tempEmployeeForm.medicalExamTypes.includes(t);
+                  return (
+                    <label key={t} className={`cursor-pointer rounded-full border px-2.5 py-1 text-xs ${checked ? 'border-brand-600 bg-brand-50 text-brand-800' : 'border-slate-300 text-slate-600'}`}>
+                      <input
+                        type="checkbox"
+                        className="hidden"
+                        checked={checked}
+                        onChange={() =>
+                          setTempEmployeeForm((f) => ({
+                            ...f,
+                            medicalExamTypes: checked ? f.medicalExamTypes.filter((x) => x !== t) : [...f.medicalExamTypes, t],
+                          }))
+                        }
+                      />
+                      {checked ? '✓ ' : ''}
+                      {t}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <Input
             label="Ek-2 Tarihi"
             type="date"
@@ -934,18 +959,20 @@ export function EmployeesPage() {
             />
             Ek-2 formuna göre işe uygun
           </label>
-          <div className="grid grid-cols-2 gap-2">
-            <Input
-              label="İşyeri Hekimi Ad Soyad"
-              value={tempEmployeeForm.healthAuthorityDoctorName}
-              onChange={(e) => setTempEmployeeForm((f) => ({ ...f, healthAuthorityDoctorName: e.target.value }))}
-            />
-            <Input
-              label="İşyeri Hekimi Sertifika No"
-              value={tempEmployeeForm.healthAuthorityCertificateNo}
-              onChange={(e) => setTempEmployeeForm((f) => ({ ...f, healthAuthorityCertificateNo: e.target.value }))}
-            />
-          </div>
+          <RoleAssignmentSelect
+            companyId={selectedCompany?.id}
+            roleType="ISYERI_HEKIMI"
+            label="İşyeri Hekimi"
+            value={tempEmployeeForm.physicianAssignmentId}
+            onChange={(id) => setTempEmployeeForm((f) => ({ ...f, physicianAssignmentId: id }))}
+          />
+          <RoleAssignmentSelect
+            companyId={selectedCompany?.id}
+            roleType="DIGER_SAGLIK_PERSONELI"
+            label="DSP (Diğer Sağlık Personeli)"
+            value={tempEmployeeForm.dspAssignmentId}
+            onChange={(id) => setTempEmployeeForm((f) => ({ ...f, dspAssignmentId: id }))}
+          />
           <Input
             label="MYK Belge No"
             value={tempEmployeeForm.mykCertificateNo}
@@ -1011,6 +1038,7 @@ export function EmployeesPage() {
         {employees?.map((emp) => {
           const trainingChip = trainingStatusChip(emp);
           const medicalChip = medicalExamStatusChip(emp);
+          const ek2Chip = ek2StatusChip(emp);
           return (
             <div key={emp.id} className="rounded-xl border border-slate-200 bg-surface p-3 transition hover:border-brand-300">
               <div className="flex items-start gap-2">
@@ -1038,6 +1066,7 @@ export function EmployeesPage() {
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     <StatusChip chip={trainingChip} />
                     <StatusChip chip={medicalChip} />
+                    <StatusChip chip={ek2Chip} />
                     {emp.isgRole && <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[11px] font-medium text-purple-700">🦺 {emp.isgRole}</span>}
                   </div>
                 </Link>
