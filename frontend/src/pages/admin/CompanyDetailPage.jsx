@@ -16,7 +16,34 @@ const COMPANY_TYPE_LABELS = {
 
 const DANGER_CLASS_LABELS = { COK_TEHLIKELI: 'Çok Tehlikeli', TEHLIKELI: 'Tehlikeli', AZ_TEHLIKELI: 'Az Tehlikeli' };
 const INCIDENT_TYPE_LABELS = { KAZA: 'Kaza', RAMAK_KALA: 'Ramak Kala' };
-const DOC_TYPE_LABELS = { RISK_ANALIZI: 'Risk Analizi', ACIL_DURUM_EYLEM_PLANI: 'Acil Durum Eylem Planı' };
+const DOC_TYPE_LABELS = { RISK_ANALIZI: 'Risk Analizi', ACIL_DURUM_EYLEM_PLANI: 'Acil Durum Eylem Planı', DIGER: 'Diğer' };
+const EMPTY_DOCUMENT_FORM = { docType: 'RISK_ANALIZI', docTypeOther: '', preparedDate: '', approved: false, approvedDate: '', validUntil: '', fileObjectKey: '', notes: '' };
+const EMPTY_EQUIPMENT_FORM = {
+  name: '',
+  serialNumber: '',
+  licenseNumber: '',
+  periodicInspectionDate: '',
+  periodicInspectionValidUntil: '',
+  hasDamage: false,
+  damageDescription: '',
+  fitForUse: true,
+  assignedTo: 'FIRMA',
+  assignedEmployeeId: '',
+  operatorSource: 'YOK',
+  operatorEmployeeId: '',
+  operatorOutsideFullName: '',
+  operatorOutsideCompanyName: '',
+  operatorOutsideNationalId: '',
+  operatorOutsideSgkNo: '',
+  operatorCertificateNo: '',
+  fileObjectKey: '',
+};
+const EQUIPMENT_FILTERS = [
+  { key: 'noInspection', label: 'Periyodik kontrolü olmayanlar' },
+  { key: 'hasDamage', label: 'Hasarı olanlar' },
+  { key: 'notFitForUse', label: 'Çalışmaya uygun olmayanlar' },
+  { key: 'unassigned', label: 'Operatörü olmayanlar' },
+];
 const PENALTY_STATUS_LABELS = { BEKLEMEDE: 'Onay Bekliyor', ONAYLANDI: 'Onaylandı', REDDEDILDI: 'Reddedildi' };
 const PENALTY_STATUS_VARIANT = { BEKLEMEDE: 'warning', ONAYLANDI: 'success', REDDEDILDI: 'danger' };
 
@@ -41,6 +68,40 @@ function toInputDate(value) {
   if (!value) return '';
   return new Date(value).toISOString().slice(0, 10);
 }
+function toInputDateTime(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+const EMPTY_INCIDENT_FORM = {
+  type: 'KAZA',
+  eventDateTime: '',
+  employeeId: '',
+  eventDescription: '',
+  location: '',
+  cause: '',
+  witnessEmployeeId: '',
+  witnessStatement: '',
+  referredToHospital: false,
+  hospitalName: '',
+  firstAidGiven: false,
+  firstAidSelection: '',
+  firstAidGivenBy: '',
+  firstAidGivenById: '',
+  firstAidGivenByOutsideNationalId: '',
+  firstAidGivenByOutsidePhone: '',
+  firstAidGivenByOutsideCompanyName: '',
+  victimProfession: '',
+  doctorReportPhotoKey: '',
+  reportDaysOff: '',
+  returnToWorkDate: '',
+  returnToWorkTrainingGiven: false,
+  returnToWorkTrainingTopic: '',
+  returnToWorkTrainingDuration: '',
+  actionsTaken: '',
+};
 
 /** Tek bir dosya (görsel veya PDF) seçip R2'ye presigned URL ile yükler, elde edilen key'i döner. */
 function SingleFileUploader({ onUploaded, label = 'Dosya Yükle (Fotoğraf/PDF)' }) {
@@ -169,7 +230,7 @@ export function CompanyDetailPage() {
               tab === t.key ? 'bg-brand-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
             }`}
           >
-            {t.label}
+            {t.key === 'ekipman' ? `${t.label} (${equipmentList?.length ?? equipmentCount ?? 0})` : t.label}
           </button>
         ))}
       </div>
@@ -196,6 +257,7 @@ export function CompanyDetailPage() {
           roles={roleAssignments}
           employees={employees}
           roleTypes={roleTypes}
+          projectBlocks={projectBlocks}
           canManage={canManage}
           onChange={loadDetail}
           setError={setError}
@@ -203,7 +265,7 @@ export function CompanyDetailPage() {
         />
       )}
       {tab === 'kaza' && (
-        <KazaTab companyId={id} incidents={incidents.recent} employees={employees} onChange={loadDetail} setError={setError} setNotice={setNotice} />
+        <KazaTab companyId={id} employees={employees} onChange={loadDetail} setError={setError} setNotice={setNotice} />
       )}
       {tab === 'belgeler' && (
         <BelgelerTab companyId={id} documents={documents} onChange={loadDetail} setError={setError} setNotice={setNotice} />
@@ -475,11 +537,99 @@ const EMPTY_ROLE_FORM = {
   certificateClass: '',
   certificateStartDate: '',
   certificateEndDate: '',
+  blockIds: [],
 };
 
 const ISG_UZMANI_CLASSES = ['A Sınıfı', 'B Sınıfı', 'C Sınıfı'];
 
-function RollerTab({ companyId, roles, employees, roleTypes, canManage, onChange, setError, setNotice }) {
+/** Bölge seçim listesi: checkbox'lar. Hiçbiri seçilmezse "Tüm Bölgeler" (firmanın tüm bölgelerinden sorumlu) anlamına gelir. */
+function RoleBlockSelector({ blocks, value, onChange }) {
+  if (!blocks || blocks.length === 0) {
+    return <p className="text-xs text-slate-400">Bu projede henüz bölge/blok tanımlanmamış - kişi varsayılan olarak firmanın tüm bölgelerinden sorumlu sayılır.</p>;
+  }
+  function toggle(blockId) {
+    onChange(value.includes(blockId) ? value.filter((id) => id !== blockId) : [...value, blockId]);
+  }
+  return (
+    <div>
+      <span className="mb-1.5 block text-sm font-medium text-slate-700">
+        Sorumlu Olduğu Bölgeler <span className="font-normal text-slate-400">(hiçbiri seçilmezse "Tüm Bölgeler" sayılır)</span>
+      </span>
+      <div className="flex flex-wrap gap-2">
+        {blocks.map((b) => {
+          const selected = value.includes(b.id);
+          return (
+            <button
+              key={b.id}
+              type="button"
+              onClick={() => toggle(b.id)}
+              className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                selected ? 'border-brand-600 bg-brand-50 text-brand-800' : 'border-slate-300 text-slate-600 hover:border-brand-300'
+              }`}
+            >
+              {selected ? '✓ ' : ''}
+              {b.name}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Roller & Ekipler sekmesinin "Şema" görünümü: her rol tipini company_role_types.sortOrder
+ * sırasına göre bir kademe (tier) olarak üstten alta dizer - en üstteki en düşük sortOrder'a
+ * sahip rol tipidir ("en üst rol"). Görevler sayfasında sıralama değişince (sortOrder PATCH
+ * edilince) bu görünüm otomatik güncellenir çünkü roleTypes prop'u oradan taze çekilir.
+ */
+function RoleOrgChart({ roleTypes, roles }) {
+  const orderedTypes = [...roleTypes].sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label, 'tr'));
+  const now = new Date();
+  const tiers = orderedTypes
+    .map((t) => ({ type: t, people: roles.filter((r) => r.roleType === t.key) }))
+    .filter((tier) => tier.people.length > 0);
+
+  if (tiers.length === 0) {
+    return <p className="text-sm text-slate-500">Şema oluşturmak için önce en az bir rol ataması yapılmalı.</p>;
+  }
+
+  return (
+    <div className="space-y-1">
+      {tiers.map((tier, idx) => (
+        <div key={tier.type.key}>
+          <div className="flex flex-col items-center gap-2">
+            <div className="text-center">
+              <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">{tier.type.label}</span>
+            </div>
+            <div className="flex flex-wrap justify-center gap-3">
+              {tier.people.map((r) => {
+                const isPast = r.certificateEndDate && new Date(r.certificateEndDate) < now;
+                return (
+                  <div
+                    key={r.id}
+                    className={`min-w-[160px] rounded-xl border-2 px-4 py-2.5 text-center shadow-sm ${
+                      isPast ? 'border-slate-200 bg-slate-50 opacity-60' : 'border-brand-300 bg-white'
+                    }`}
+                  >
+                    <div className="text-sm font-semibold text-slate-800">{r.source === 'CALISAN' ? r.employeeFullName : r.outsideFullName}</div>
+                    {r.blocks && r.blocks.length > 0 && (
+                      <div className="mt-1 text-[10px] text-slate-500">📍 {r.blocks.map((b) => b.name).join(', ')}</div>
+                    )}
+                    {isPast && <div className="mt-1 text-[10px] text-slate-400">Pasif</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          {idx < tiers.length - 1 && <div className="mx-auto my-1.5 h-6 w-px bg-slate-300" />}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RollerTab({ companyId, roles, employees, roleTypes, projectBlocks, canManage, onChange, setError, setNotice }) {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const roleLabel = (key) => roleTypes.find((rt) => rt.key === key)?.label || key;
@@ -487,6 +637,7 @@ function RollerTab({ companyId, roles, employees, roleTypes, canManage, onChange
   const acilEkipleri = roleTypes.filter((rt) => rt.category === 'ACIL_EKIP');
   const [form, setForm] = useState(EMPTY_ROLE_FORM);
   const [submitting, setSubmitting] = useState(false);
+  const [view, setView] = useState('liste');
 
   // Rol kataloğu yüklenince (veya değişince), formdaki seçili rolün hâlâ geçerli olduğundan
   // emin ol; değilse ilk seçeneğe düş - Görevler sayfasından yeni bir rol eklenip silinmiş
@@ -519,6 +670,7 @@ function RollerTab({ companyId, roles, employees, roleTypes, canManage, onChange
       certificateClass: r.certificateClass || '',
       certificateStartDate: r.certificateStartDate ? toInputDate(r.certificateStartDate) : '',
       certificateEndDate: r.certificateEndDate ? toInputDate(r.certificateEndDate) : '',
+      blockIds: (r.blocks || []).map((b) => b.id),
     });
     setShowForm(true);
   }
@@ -544,6 +696,7 @@ function RollerTab({ companyId, roles, employees, roleTypes, canManage, onChange
           certificateClass: form.certificateClass,
           certificateStartDate: form.certificateStartDate,
           certificateEndDate: form.certificateEndDate,
+          blockIds: form.blockIds,
         });
         setNotice('Rol kaydı güncellendi.');
       } else {
@@ -632,6 +785,15 @@ function RollerTab({ companyId, roles, employees, roleTypes, canManage, onChange
                     {r.certificateStartDate && <>{formatDate(r.certificateStartDate)} - {r.certificateEndDate ? formatDate(r.certificateEndDate) : 'Aktif'}</>}
                   </div>
                 )}
+                <div className="mt-1 flex flex-wrap gap-1 text-[11px] text-slate-500">
+                  {r.blocks && r.blocks.length > 0 ? (
+                    r.blocks.map((b) => (
+                      <span key={b.id} className="rounded-full bg-slate-100 px-2 py-0.5">📍 {b.name}</span>
+                    ))
+                  ) : (
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-400">📍 Tüm Bölgeler</span>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -642,8 +804,31 @@ function RollerTab({ companyId, roles, employees, roleTypes, canManage, onChange
 
   return (
     <div className="space-y-4">
-      <RoleGroup title="Firma Rolleri" types={firmaRolleri} />
-      <RoleGroup title="Acil Durum Ekipleri" types={acilEkipleri} />
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setView('liste')}
+          className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${view === 'liste' ? 'bg-brand-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+        >
+          📋 Liste
+        </button>
+        <button
+          onClick={() => setView('sema')}
+          className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${view === 'sema' ? 'bg-brand-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+        >
+          🗂️ Şema
+        </button>
+      </div>
+
+      {view === 'liste' ? (
+        <>
+          <RoleGroup title="Firma Rolleri" types={firmaRolleri} />
+          <RoleGroup title="Acil Durum Ekipleri" types={acilEkipleri} />
+        </>
+      ) : (
+        <Card>
+          <RoleOrgChart roleTypes={roleTypes} roles={roles} />
+        </Card>
+      )}
 
       {!canManage ? null : !showForm ? (
         <Button variant="secondary" onClick={openAddForm}>
@@ -717,6 +902,7 @@ function RollerTab({ companyId, roles, employees, roleTypes, canManage, onChange
               <Input label="Atama/Başlangıç Tarihi" type="date" value={form.certificateStartDate} onChange={(e) => setForm((f) => ({ ...f, certificateStartDate: e.target.value }))} />
               <Input label="Çıkış Tarihi (varsa)" type="date" value={form.certificateEndDate} onChange={(e) => setForm((f) => ({ ...f, certificateEndDate: e.target.value }))} />
             </div>
+            <RoleBlockSelector blocks={projectBlocks} value={form.blockIds} onChange={(blockIds) => setForm((f) => ({ ...f, blockIds }))} />
             <div className="flex gap-2">
               <Button type="submit" disabled={submitting}>
                 {submitting ? 'Kaydediliyor...' : editingId ? 'Güncelle' : 'Ekle'}
@@ -732,28 +918,104 @@ function RollerTab({ companyId, roles, employees, roleTypes, canManage, onChange
   );
 }
 
-function KazaTab({ companyId, incidents, employees, onChange, setError, setNotice }) {
+function KazaTab({ companyId, employees, onChange, setError, setNotice }) {
+  const [incidents, setIncidents] = useState(null);
+  const [typeFilter, setTypeFilter] = useState('ALL');
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({
-    type: 'KAZA',
-    eventDateTime: '',
-    employeeId: '',
-    eventDescription: '',
-    location: '',
-    cause: '',
-    witnessEmployeeId: '',
-    witnessStatement: '',
-    referredToHospital: false,
-    hospitalName: '',
-    firstAidGiven: false,
-    firstAidGivenBy: '',
-    victimProfession: '',
-    doctorReportPhotoKey: '',
-    reportDaysOff: '',
-    returnToWorkDate: '',
-    actionsTaken: '',
-  });
+  const [editingId, setEditingId] = useState(null);
+  const [firstAidRoster, setFirstAidRoster] = useState([]);
+  const [form, setForm] = useState(EMPTY_INCIDENT_FORM);
   const [submitting, setSubmitting] = useState(false);
+
+  async function loadIncidents() {
+    try {
+      const { data } = await apiClient.get('/admin/incidents', { params: { companyId } });
+      setIncidents(data.incidents);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
+  }
+
+  useEffect(() => {
+    loadIncidents();
+    apiClient
+      .get('/admin/company-roles', { params: { companyId } })
+      .then(({ data }) => setFirstAidRoster((data.roles || []).filter((r) => r.roleType === 'DIGER_SAGLIK_PERSONELI' || r.roleType === 'ILKYARDIM')))
+      .catch(() => setFirstAidRoster([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId]);
+
+  const list = incidents || [];
+  const kazaCount = list.filter((i) => i.type === 'KAZA').length;
+  const ramakKalaCount = list.filter((i) => i.type === 'RAMAK_KALA').length;
+  const visibleList = typeFilter === 'ALL' ? list : list.filter((i) => i.type === typeFilter);
+
+  function openAddForm() {
+    setEditingId(null);
+    setForm(EMPTY_INCIDENT_FORM);
+    setShowForm(true);
+  }
+
+  function openEditForm(inc) {
+    setEditingId(inc.id);
+    setForm({
+      type: inc.type,
+      eventDateTime: inc.eventDateTime ? toInputDateTime(inc.eventDateTime) : '',
+      employeeId: inc.employeeId || '',
+      eventDescription: inc.eventDescription || '',
+      location: inc.location || '',
+      cause: inc.cause || '',
+      witnessEmployeeId: inc.witnessEmployeeId || '',
+      witnessStatement: inc.witnessStatement || '',
+      referredToHospital: !!inc.referredToHospital,
+      hospitalName: inc.hospitalName || '',
+      firstAidGiven: !!inc.firstAidGiven,
+      firstAidSelection: inc.firstAidGivenById || (inc.firstAidGiven && !inc.firstAidGivenById ? 'DIGER' : ''),
+      firstAidGivenBy: inc.firstAidGivenBy || '',
+      firstAidGivenById: inc.firstAidGivenById || '',
+      firstAidGivenByOutsideNationalId: inc.firstAidGivenByOutsideNationalId || '',
+      firstAidGivenByOutsidePhone: inc.firstAidGivenByOutsidePhone || '',
+      firstAidGivenByOutsideCompanyName: inc.firstAidGivenByOutsideCompanyName || '',
+      victimProfession: inc.victimProfession || '',
+      doctorReportPhotoKey: inc.doctorReportPhotoKey || '',
+      reportDaysOff: inc.reportDaysOff != null ? String(inc.reportDaysOff) : '',
+      returnToWorkDate: inc.returnToWorkDate ? toInputDate(inc.returnToWorkDate) : '',
+      returnToWorkTrainingGiven: !!inc.returnToWorkTrainingGiven,
+      returnToWorkTrainingTopic: inc.returnToWorkTrainingTopic || '',
+      returnToWorkTrainingDuration: inc.returnToWorkTrainingDuration || '',
+      actionsTaken: inc.actionsTaken || '',
+    });
+    setShowForm(true);
+  }
+
+  function closeForm() {
+    setShowForm(false);
+    setEditingId(null);
+    setForm(EMPTY_INCIDENT_FORM);
+  }
+
+  function handleEmployeeChange(id) {
+    const emp = employees.find((e) => e.id === id);
+    setForm((f) => ({ ...f, employeeId: id, victimProfession: emp?.position || f.victimProfession }));
+  }
+
+  function handleFirstAidSelectionChange(value) {
+    if (value === 'DIGER') {
+      setForm((f) => ({ ...f, firstAidSelection: value, firstAidGivenById: '', firstAidGivenBy: '' }));
+      return;
+    }
+    const assignment = firstAidRoster.find((a) => a.id === value);
+    const name = assignment ? (assignment.source === 'CALISAN' ? assignment.employeeFullName : assignment.outsideFullName) : '';
+    setForm((f) => ({
+      ...f,
+      firstAidSelection: value,
+      firstAidGivenById: value || '',
+      firstAidGivenBy: name,
+      firstAidGivenByOutsideNationalId: '',
+      firstAidGivenByOutsidePhone: '',
+      firstAidGivenByOutsideCompanyName: '',
+    }));
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -764,17 +1026,41 @@ function KazaTab({ companyId, incidents, employees, onChange, setError, setNotic
     setSubmitting(true);
     setError(null);
     try {
-      await apiClient.post('/admin/incidents', {
-        companyId,
-        ...form,
+      const payload = {
+        type: form.type,
         eventDateTime: new Date(form.eventDateTime).toISOString(),
-        returnToWorkDate: form.returnToWorkDate ? new Date(form.returnToWorkDate).toISOString() : null,
-        reportDaysOff: form.reportDaysOff ? Number(form.reportDaysOff) : null,
         employeeId: form.employeeId || null,
+        eventDescription: form.eventDescription,
+        location: form.location || null,
+        cause: form.cause || null,
         witnessEmployeeId: form.witnessEmployeeId || null,
-      });
-      setShowForm(false);
-      setNotice('Kayıt eklendi.');
+        witnessStatement: form.witnessStatement || null,
+        referredToHospital: form.referredToHospital,
+        hospitalName: form.hospitalName || null,
+        firstAidGiven: form.firstAidGiven,
+        firstAidGivenBy: form.firstAidGiven ? form.firstAidGivenBy || null : null,
+        firstAidGivenById: form.firstAidGiven && form.firstAidSelection !== 'DIGER' ? form.firstAidGivenById || null : null,
+        firstAidGivenByOutsideNationalId: form.firstAidGiven && form.firstAidSelection === 'DIGER' ? form.firstAidGivenByOutsideNationalId || null : null,
+        firstAidGivenByOutsidePhone: form.firstAidGiven && form.firstAidSelection === 'DIGER' ? form.firstAidGivenByOutsidePhone || null : null,
+        firstAidGivenByOutsideCompanyName: form.firstAidGiven && form.firstAidSelection === 'DIGER' ? form.firstAidGivenByOutsideCompanyName || null : null,
+        victimProfession: form.victimProfession || null,
+        doctorReportPhotoKey: form.doctorReportPhotoKey || null,
+        reportDaysOff: form.reportDaysOff ? Number(form.reportDaysOff) : null,
+        returnToWorkDate: form.returnToWorkDate || null,
+        returnToWorkTrainingGiven: form.returnToWorkTrainingGiven,
+        returnToWorkTrainingTopic: form.returnToWorkTrainingGiven ? form.returnToWorkTrainingTopic || null : null,
+        returnToWorkTrainingDuration: form.returnToWorkTrainingGiven ? form.returnToWorkTrainingDuration || null : null,
+        actionsTaken: form.actionsTaken || null,
+      };
+      if (editingId) {
+        await apiClient.patch(`/admin/incidents/${editingId}`, payload);
+        setNotice('Kayıt güncellendi.');
+      } else {
+        await apiClient.post('/admin/incidents', { companyId, ...payload });
+        setNotice('Kayıt eklendi.');
+      }
+      closeForm();
+      await loadIncidents();
       onChange();
     } catch (err) {
       setError(getErrorMessage(err));
@@ -783,30 +1069,86 @@ function KazaTab({ companyId, incidents, employees, onChange, setError, setNotic
     }
   }
 
+  async function handleDelete(id) {
+    if (!window.confirm('Bu kayıt silinsin mi?')) return;
+    try {
+      await apiClient.delete(`/admin/incidents/${id}`);
+      await loadIncidents();
+      onChange();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
+  }
+
   return (
     <div className="space-y-4">
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {[
+          { key: 'ALL', label: `Toplam (${list.length})` },
+          { key: 'KAZA', label: `Kaza (${kazaCount})` },
+          { key: 'RAMAK_KALA', label: `Ramak Kala (${ramakKalaCount})` },
+        ].map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setTypeFilter(t.key)}
+            className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition ${
+              typeFilter === t.key ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       <div className="space-y-2">
-        {incidents.length === 0 && <p className="text-sm text-slate-500">Kaza/ramak kala kaydı yok.</p>}
-        {incidents.map((inc) => (
+        {incidents === null && <p className="text-sm text-slate-500">Yükleniyor...</p>}
+        {incidents !== null && visibleList.length === 0 && <p className="text-sm text-slate-500">Bu durumda kayıt yok.</p>}
+        {visibleList.map((inc) => (
           <Card key={inc.id}>
-            <div className="flex items-center gap-2">
-              <Badge variant={inc.type === 'KAZA' ? 'danger' : 'warning'}>{INCIDENT_TYPE_LABELS[inc.type]}</Badge>
-              <span className="text-xs text-slate-500">{formatDateTime(inc.eventDateTime)}</span>
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant={inc.type === 'KAZA' ? 'danger' : 'warning'}>{INCIDENT_TYPE_LABELS[inc.type]}</Badge>
+                  {inc.code && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-mono text-slate-600">{inc.code}</span>}
+                  <span className="text-xs text-slate-500">{formatDateTime(inc.eventDateTime)}</span>
+                </div>
+                <p className="mt-1 text-sm text-slate-700">{inc.eventDescription}</p>
+                {inc.employeeFullName && (
+                  <p className="mt-1 text-xs text-slate-500">
+                    Çalışan: {inc.employeeFullName}
+                    {inc.employeeIncidentSeq ? ` (${inc.employeeIncidentSeq}. Kazası)` : ''}
+                  </p>
+                )}
+                {inc.reportDaysOff != null && <p className="text-xs text-slate-500">Rapor: {inc.reportDaysOff} gün</p>}
+                {inc.returnToWorkDate && (
+                  <p className="text-xs text-slate-500">
+                    İşe Dönüş: {formatDate(inc.returnToWorkDate)} —{' '}
+                    {inc.returnToWorkTrainingGiven ? '✓ Eğitim verildi' : '⚠ Eğitim bekleniyor'}
+                  </p>
+                )}
+              </div>
+              <div className="flex shrink-0 gap-2 text-xs">
+                <button type="button" onClick={() => openEditForm(inc)} className="text-brand-700 hover:underline">
+                  Düzenle
+                </button>
+                <button type="button" onClick={() => handleDelete(inc.id)} className="text-red-600 hover:underline">
+                  Sil
+                </button>
+              </div>
             </div>
-            <p className="mt-1 text-sm text-slate-700">{inc.eventDescription}</p>
-            {inc.employeeFullName && <p className="mt-1 text-xs text-slate-500">Çalışan: {inc.employeeFullName}</p>}
-            {inc.reportDaysOff != null && <p className="text-xs text-slate-500">Rapor: {inc.reportDaysOff} gün</p>}
           </Card>
         ))}
       </div>
 
       {!showForm ? (
-        <Button variant="secondary" onClick={() => setShowForm(true)}>
+        <Button variant="secondary" onClick={openAddForm}>
           + Kaza / Ramak Kala Ekle
         </Button>
       ) : (
         <Card>
           <form onSubmit={handleSubmit} className="space-y-3">
+            <h4 className="font-medium text-slate-800">{editingId ? 'Kaydı Düzenle' : 'Yeni Kayıt'}</h4>
             <Select label="Tür" value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}>
               <option value="KAZA">Kaza</option>
               <option value="RAMAK_KALA">Ramak Kala</option>
@@ -819,9 +1161,21 @@ function KazaTab({ companyId, incidents, employees, onChange, setError, setNotic
               <>
                 <div className="space-y-1.5">
                   <span className="mb-1.5 block text-sm font-medium text-slate-700">Kazayı Geçiren Çalışan</span>
-                  <EmployeeCombobox employees={employees} value={form.employeeId} onChange={(id) => setForm((f) => ({ ...f, employeeId: id }))} />
+                  <EmployeeCombobox employees={employees} value={form.employeeId} onChange={handleEmployeeChange} />
+                  {form.employeeId && (
+                    <p className="text-xs text-slate-500">
+                      İşe Giriş Tarihi: {formatDate(employees.find((e) => e.id === form.employeeId)?.startDate)}
+                    </p>
+                  )}
                 </div>
-                <Input label="Kazazedenin Mesleği" value={form.victimProfession} onChange={(e) => setForm((f) => ({ ...f, victimProfession: e.target.value }))} />
+                <div>
+                  <Input
+                    label="Kazazedenin Mesleği"
+                    value={form.victimProfession}
+                    onChange={(e) => setForm((f) => ({ ...f, victimProfession: e.target.value }))}
+                  />
+                  <p className="mt-1 text-xs text-slate-400">Çalışan seçilince otomatik doldurulur, gerekirse değiştirebilirsiniz.</p>
+                </div>
               </>
             )}
             <div className="space-y-1.5">
@@ -850,21 +1204,87 @@ function KazaTab({ companyId, incidents, employees, onChange, setError, setNotic
                   İlk yardım müdahalesi yapıldı
                 </label>
                 {form.firstAidGiven && (
-                  <Input label="Kim Tarafından Yapıldı" value={form.firstAidGivenBy} onChange={(e) => setForm((f) => ({ ...f, firstAidGivenBy: e.target.value }))} />
+                  <>
+                    <Select label="Kim Tarafından Yapıldı" value={form.firstAidSelection} onChange={(e) => handleFirstAidSelectionChange(e.target.value)}>
+                      <option value="">Seçiniz</option>
+                      {firstAidRoster.length > 0 && (
+                        <optgroup label="Firma Rolleri (DSP / İlkyardımcı)">
+                          {firstAidRoster.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.source === 'CALISAN' ? a.employeeFullName : a.outsideFullName} ({a.roleType === 'ILKYARDIM' ? 'İlkyardımcı' : 'DSP'})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      <option value="DIGER">Diğer (listede yok)</option>
+                    </Select>
+                    {form.firstAidSelection === 'DIGER' && (
+                      <div className="space-y-2 rounded-lg border border-slate-200 p-2.5">
+                        <Input label="Ad Soyad" value={form.firstAidGivenBy} onChange={(e) => setForm((f) => ({ ...f, firstAidGivenBy: e.target.value }))} />
+                        <div className="grid grid-cols-2 gap-2">
+                          <Input
+                            label="T.C. Kimlik No"
+                            value={form.firstAidGivenByOutsideNationalId}
+                            onChange={(e) => setForm((f) => ({ ...f, firstAidGivenByOutsideNationalId: e.target.value }))}
+                          />
+                          <Input
+                            label="Telefon"
+                            value={form.firstAidGivenByOutsidePhone}
+                            onChange={(e) => setForm((f) => ({ ...f, firstAidGivenByOutsidePhone: e.target.value }))}
+                          />
+                        </div>
+                        <Input
+                          label="Firma (varsa)"
+                          value={form.firstAidGivenByOutsideCompanyName}
+                          onChange={(e) => setForm((f) => ({ ...f, firstAidGivenByOutsideCompanyName: e.target.value }))}
+                        />
+                      </div>
+                    )}
+                  </>
                 )}
                 <SingleFileUploader label="Doktor Raporu (Görsel/PDF)" onUploaded={(key) => setForm((f) => ({ ...f, doctorReportPhotoKey: key }))} />
                 <div className="grid grid-cols-2 gap-3">
                   <Input label="Rapor (Gün)" type="number" min="0" value={form.reportDaysOff} onChange={(e) => setForm((f) => ({ ...f, reportDaysOff: e.target.value }))} />
-                  <Input label="İşe Başlama Tarihi" type="date" value={form.returnToWorkDate} onChange={(e) => setForm((f) => ({ ...f, returnToWorkDate: e.target.value }))} />
+                  <Input label="İşe Dönüş Tarihi" type="date" value={form.returnToWorkDate} onChange={(e) => setForm((f) => ({ ...f, returnToWorkDate: e.target.value }))} />
                 </div>
+                {form.returnToWorkDate && (
+                  <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-2.5">
+                    <label className="flex items-center gap-2 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={form.returnToWorkTrainingGiven}
+                        onChange={(e) => setForm((f) => ({ ...f, returnToWorkTrainingGiven: e.target.checked }))}
+                      />
+                      İşe dönüş eğitimi verildi
+                    </label>
+                    {form.returnToWorkTrainingGiven && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input
+                          label="Eğitim Konusu"
+                          value={form.returnToWorkTrainingTopic}
+                          onChange={(e) => setForm((f) => ({ ...f, returnToWorkTrainingTopic: e.target.value }))}
+                        />
+                        <Input
+                          label="Süresi"
+                          value={form.returnToWorkTrainingDuration}
+                          onChange={(e) => setForm((f) => ({ ...f, returnToWorkTrainingDuration: e.target.value }))}
+                          placeholder="ör. 2 saat"
+                        />
+                      </div>
+                    )}
+                    {!form.returnToWorkTrainingGiven && (
+                      <p className="text-xs text-amber-700">İşe dönüş tarihi gelince admine otomatik hatırlatma gönderilir.</p>
+                    )}
+                  </div>
+                )}
               </>
             )}
             <Textarea label="Alınan Aksiyon" value={form.actionsTaken} onChange={(e) => setForm((f) => ({ ...f, actionsTaken: e.target.value }))} />
             <div className="flex gap-2">
               <Button type="submit" disabled={submitting}>
-                {submitting ? 'Ekleniyor...' : 'Kaydet'}
+                {submitting ? 'Kaydediliyor...' : editingId ? 'Güncelle' : 'Kaydet'}
               </Button>
-              <Button type="button" variant="secondary" onClick={() => setShowForm(false)}>
+              <Button type="button" variant="secondary" onClick={closeForm}>
                 Vazgeç
               </Button>
             </div>
@@ -877,7 +1297,7 @@ function KazaTab({ companyId, incidents, employees, onChange, setError, setNotic
 
 function BelgelerTab({ companyId, documents, onChange, setError, setNotice }) {
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ docType: 'RISK_ANALIZI', preparedDate: '', approved: false, approvedDate: '', validUntil: '', fileObjectKey: '', notes: '' });
+  const [form, setForm] = useState(EMPTY_DOCUMENT_FORM);
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(e) {
@@ -893,6 +1313,7 @@ function BelgelerTab({ companyId, documents, onChange, setError, setNotice }) {
         validUntil: form.validUntil ? new Date(form.validUntil).toISOString() : null,
       });
       setShowForm(false);
+      setForm(EMPTY_DOCUMENT_FORM);
       setNotice('Belge eklendi.');
       onChange();
     } catch (err) {
@@ -920,7 +1341,7 @@ function BelgelerTab({ companyId, documents, onChange, setError, setNotice }) {
           <Card key={d.id}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Badge variant="purple">{DOC_TYPE_LABELS[d.docType]}</Badge>
+                <Badge variant="purple">{d.docType === 'DIGER' ? d.docTypeOther || 'Diğer' : DOC_TYPE_LABELS[d.docType]}</Badge>
                 <Badge variant={d.approved ? 'success' : 'warning'}>{d.approved ? 'Onaylı' : 'Onay Bekliyor'}</Badge>
               </div>
               <button onClick={() => handleDelete(d.id)} className="text-xs text-red-600 hover:underline">
@@ -940,7 +1361,7 @@ function BelgelerTab({ companyId, documents, onChange, setError, setNotice }) {
       </div>
 
       {!showForm ? (
-        <Button variant="secondary" onClick={() => setShowForm(true)}>
+        <Button variant="secondary" onClick={() => { setForm(EMPTY_DOCUMENT_FORM); setShowForm(true); }}>
           + Belge Ekle
         </Button>
       ) : (
@@ -953,6 +1374,9 @@ function BelgelerTab({ companyId, documents, onChange, setError, setNotice }) {
                 </option>
               ))}
             </Select>
+            {form.docType === 'DIGER' && (
+              <Input label="Belge Adı" value={form.docTypeOther} onChange={(e) => setForm((f) => ({ ...f, docTypeOther: e.target.value }))} required />
+            )}
             <div className="grid grid-cols-2 gap-3">
               <Input label="Hazırlanma Tarihi" type="date" value={form.preparedDate} onChange={(e) => setForm((f) => ({ ...f, preparedDate: e.target.value }))} />
               <Input label="Geçerlilik Tarihi" type="date" value={form.validUntil} onChange={(e) => setForm((f) => ({ ...f, validUntil: e.target.value }))} />
@@ -970,7 +1394,7 @@ function BelgelerTab({ companyId, documents, onChange, setError, setNotice }) {
               <Button type="submit" disabled={submitting}>
                 {submitting ? 'Ekleniyor...' : 'Kaydet'}
               </Button>
-              <Button type="button" variant="secondary" onClick={() => setShowForm(false)}>
+              <Button type="button" variant="secondary" onClick={() => { setShowForm(false); setForm(EMPTY_DOCUMENT_FORM); }}>
                 Vazgeç
               </Button>
             </div>
@@ -985,8 +1409,10 @@ function KurulTab({ companyId, meetings, boardStatus, dangerClass, onChange, set
   const [showForm, setShowForm] = useState(false);
   const now = new Date();
   const defaultPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const [form, setForm] = useState({ meetingDate: '', periodLabel: defaultPeriod, isExtraordinary: false, attendanceFormFileKey: '', notes: '' });
+  const emptyForm = { meetingDate: '', periodLabel: defaultPeriod, isExtraordinary: false, attendanceFormFileKey: '', notes: '' };
+  const [form, setForm] = useState(emptyForm);
   const [submitting, setSubmitting] = useState(false);
+  const [openYears, setOpenYears] = useState(() => new Set([now.getFullYear()]));
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -999,6 +1425,7 @@ function KurulTab({ companyId, meetings, boardStatus, dangerClass, onChange, set
     try {
       await apiClient.post('/admin/board-meetings', { companyId, ...form, meetingDate: new Date(form.meetingDate).toISOString() });
       setShowForm(false);
+      setForm(emptyForm);
       setNotice('Toplantı kaydedildi.');
       onChange();
     } catch (err) {
@@ -1018,6 +1445,24 @@ function KurulTab({ companyId, meetings, boardStatus, dangerClass, onChange, set
     }
   }
 
+  function toggleYear(year) {
+    setOpenYears((prev) => {
+      const next = new Set(prev);
+      if (next.has(year)) next.delete(year);
+      else next.add(year);
+      return next;
+    });
+  }
+
+  // Toplantıları yıla göre grupla (meetings zaten backend'de tarihe göre azalan sırada gelir).
+  const meetingsByYear = new Map();
+  for (const m of meetings) {
+    const year = new Date(m.meetingDate).getFullYear();
+    if (!meetingsByYear.has(year)) meetingsByYear.set(year, []);
+    meetingsByYear.get(year).push(m);
+  }
+  const years = [...meetingsByYear.keys()].sort((a, b) => b - a);
+
   return (
     <div className="space-y-4">
       {!dangerClass ? (
@@ -1036,32 +1481,48 @@ function KurulTab({ companyId, meetings, boardStatus, dangerClass, onChange, set
         </Card>
       )}
 
-      <div className="space-y-2">
+      <div className="space-y-3">
         {meetings.length === 0 && <p className="text-sm text-slate-500">Toplantı kaydı yok.</p>}
-        {meetings.map((m) => (
-          <Card key={m.id}>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-slate-800">{formatDate(m.meetingDate)}</span>
-                <Badge variant="default">{m.periodLabel}</Badge>
-                {m.isExtraordinary && <Badge variant="orange">Olağanüstü</Badge>}
+        {years.map((year) => (
+          <div key={year} className="space-y-2">
+            <button
+              type="button"
+              onClick={() => toggleYear(year)}
+              className="flex w-full items-center justify-between rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700"
+            >
+              <span>{year} ({meetingsByYear.get(year).length} toplantı)</span>
+              <span>{openYears.has(year) ? '▲' : '▼'}</span>
+            </button>
+            {openYears.has(year) && (
+              <div className="space-y-2">
+                {meetingsByYear.get(year).map((m) => (
+                  <Card key={m.id}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-slate-800">{formatDate(m.meetingDate)}</span>
+                        <Badge variant="default">{m.periodLabel}</Badge>
+                        {m.isExtraordinary && <Badge variant="orange">Olağanüstü</Badge>}
+                      </div>
+                      <button onClick={() => handleDelete(m.id)} className="text-xs text-red-600 hover:underline">
+                        Sil
+                      </button>
+                    </div>
+                    {m.notes && <p className="mt-1 text-sm text-slate-600">{m.notes}</p>}
+                    {m.attendanceFormViewUrl && (
+                      <a href={m.attendanceFormViewUrl} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs text-brand-700 hover:underline">
+                        Katılım formunu görüntüle
+                      </a>
+                    )}
+                  </Card>
+                ))}
               </div>
-              <button onClick={() => handleDelete(m.id)} className="text-xs text-red-600 hover:underline">
-                Sil
-              </button>
-            </div>
-            {m.notes && <p className="mt-1 text-sm text-slate-600">{m.notes}</p>}
-            {m.attendanceFormViewUrl && (
-              <a href={m.attendanceFormViewUrl} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs text-brand-700 hover:underline">
-                Katılım formunu görüntüle
-              </a>
             )}
-          </Card>
+          </div>
         ))}
       </div>
 
       {!showForm ? (
-        <Button variant="secondary" onClick={() => setShowForm(true)}>
+        <Button variant="secondary" onClick={() => { setForm(emptyForm); setShowForm(true); }}>
           + Toplantı Ekle
         </Button>
       ) : (
@@ -1079,7 +1540,7 @@ function KurulTab({ companyId, meetings, boardStatus, dangerClass, onChange, set
               <Button type="submit" disabled={submitting}>
                 {submitting ? 'Ekleniyor...' : 'Kaydet'}
               </Button>
-              <Button type="button" variant="secondary" onClick={() => setShowForm(false)}>
+              <Button type="button" variant="secondary" onClick={() => { setShowForm(false); setForm(emptyForm); }}>
                 Vazgeç
               </Button>
             </div>
@@ -1092,26 +1553,48 @@ function KurulTab({ companyId, meetings, boardStatus, dangerClass, onChange, set
 
 function EkipmanTab({ projectId, companyId, equipment, employees, onChange, setError, setNotice }) {
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({
-    name: '',
-    serialNumber: '',
-    licenseNumber: '',
-    periodicInspectionDate: '',
-    periodicInspectionValidUntil: '',
-    hasDamage: false,
-    damageDescription: '',
-    fitForUse: true,
-    assignedTo: 'FIRMA',
-    assignedEmployeeId: '',
-    operatorSource: 'YOK',
-    operatorEmployeeId: '',
-    operatorOutsideFullName: '',
-    operatorOutsideCompanyName: '',
-    operatorOutsideNationalId: '',
-    operatorOutsideSgkNo: '',
-    operatorCertificateNo: '',
-  });
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(EMPTY_EQUIPMENT_FORM);
   const [submitting, setSubmitting] = useState(false);
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
+  const [activeFilters, setActiveFilters] = useState([]);
+
+  function closeForm() {
+    setShowForm(false);
+    setEditingId(null);
+    setForm(EMPTY_EQUIPMENT_FORM);
+  }
+
+  function openAddForm() {
+    setEditingId(null);
+    setForm(EMPTY_EQUIPMENT_FORM);
+    setShowForm(true);
+  }
+
+  function openEditForm(eq) {
+    setEditingId(eq.id);
+    setForm({
+      name: eq.name || '',
+      serialNumber: eq.serialNumber || '',
+      licenseNumber: eq.licenseNumber || '',
+      periodicInspectionDate: toInputDate(eq.periodicInspectionDate),
+      periodicInspectionValidUntil: toInputDate(eq.periodicInspectionValidUntil),
+      hasDamage: !!eq.hasDamage,
+      damageDescription: eq.damageDescription || '',
+      fitForUse: eq.fitForUse !== false,
+      assignedTo: eq.assignedTo || 'FIRMA',
+      assignedEmployeeId: eq.assignedEmployeeId || '',
+      operatorSource: eq.operatorSource || 'YOK',
+      operatorEmployeeId: eq.operatorEmployeeId || '',
+      operatorOutsideFullName: eq.operatorOutsideFullName || '',
+      operatorOutsideCompanyName: eq.operatorOutsideCompanyName || '',
+      operatorOutsideNationalId: eq.operatorOutsideNationalId || '',
+      operatorOutsideSgkNo: eq.operatorOutsideSgkNo || '',
+      operatorCertificateNo: eq.operatorCertificateNo || '',
+      fileObjectKey: eq.fileObjectKey || '',
+    });
+    setShowForm(true);
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -1122,9 +1605,14 @@ function EkipmanTab({ projectId, companyId, equipment, employees, onChange, setE
     setSubmitting(true);
     setError(null);
     try {
-      await apiClient.post('/admin/equipment', { projectId, companyId, ...form });
-      setShowForm(false);
-      setNotice('Ekipman eklendi.');
+      if (editingId) {
+        await apiClient.patch(`/admin/equipment/${editingId}`, { ...form });
+        setNotice('Ekipman güncellendi.');
+      } else {
+        await apiClient.post('/admin/equipment', { projectId, companyId, ...form });
+        setNotice('Ekipman eklendi.');
+      }
+      closeForm();
       onChange();
     } catch (err) {
       setError(getErrorMessage(err));
@@ -1143,16 +1631,59 @@ function EkipmanTab({ projectId, companyId, equipment, employees, onChange, setE
     }
   }
 
+  function toggleFilter(key) {
+    setActiveFilters((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+  }
+
+  const filteredEquipment = (equipment || []).filter((eq) => {
+    if (activeFilters.length === 0) return true;
+    return activeFilters.every((key) => {
+      if (key === 'noInspection') return !eq.periodicInspectionDate;
+      if (key === 'hasDamage') return !!eq.hasDamage;
+      if (key === 'notFitForUse') return eq.fitForUse === false;
+      if (key === 'unassigned') return !eq.operatorSource || eq.operatorSource === 'YOK';
+      return true;
+    });
+  });
+
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="secondary" onClick={() => setShowFilterPanel((v) => !v)}>
+          🔎 Filtrele{activeFilters.length > 0 ? ` (${activeFilters.length})` : ''}
+        </Button>
+        {activeFilters.length > 0 && (
+          <button onClick={() => setActiveFilters([])} className="text-xs text-brand-700 hover:underline">
+            Filtreleri temizle
+          </button>
+        )}
+      </div>
+      {showFilterPanel && (
+        <Card>
+          <div className="space-y-2">
+            {EQUIPMENT_FILTERS.map((f) => (
+              <label key={f.key} className="flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" checked={activeFilters.includes(f.key)} onChange={() => toggleFilter(f.key)} />
+                {f.label}
+              </label>
+            ))}
+          </div>
+        </Card>
+      )}
+
       <div className="space-y-2">
-        {(!equipment || equipment.length === 0) && <p className="text-sm text-slate-500">Ekipman kaydı yok.</p>}
-        {equipment?.map((eq) => (
+        {(!filteredEquipment || filteredEquipment.length === 0) && (
+          <p className="text-sm text-slate-500">{activeFilters.length > 0 ? 'Filtreye uyan ekipman kaydı yok.' : 'Ekipman kaydı yok.'}</p>
+        )}
+        {filteredEquipment?.map((eq) => (
           <Card key={eq.id}>
             <div className="flex items-center justify-between">
               <span className="font-medium text-slate-800">{eq.name}</span>
               <div className="flex items-center gap-2">
                 <Badge variant={eq.fitForUse ? 'success' : 'danger'}>{eq.fitForUse ? 'Çalışmaya Uygun' : 'Uygun Değil'}</Badge>
+                <button onClick={() => openEditForm(eq)} className="text-xs text-brand-700 hover:underline">
+                  Düzenle
+                </button>
                 <button onClick={() => handleDelete(eq.id)} className="text-xs text-red-600 hover:underline">
                   Sil
                 </button>
@@ -1167,12 +1698,17 @@ function EkipmanTab({ projectId, companyId, equipment, employees, onChange, setE
               {eq.operatorSource === 'CALISAN' ? eq.operatorEmployeeId && employees.find((emp) => emp.id === eq.operatorEmployeeId)?.fullName : eq.operatorSource === 'DISARIDAN' ? `${eq.operatorOutsideFullName} (${eq.operatorOutsideCompanyName || 'Dışarıdan'})` : 'Yok'}
             </div>
             {eq.hasDamage && <p className="mt-1 text-xs text-red-600">Hasar/Eksiklik: {eq.damageDescription}</p>}
+            {eq.fileViewUrl && (
+              <a href={eq.fileViewUrl} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs text-brand-700 hover:underline">
+                📎 Ekli Belgeyi Görüntüle
+              </a>
+            )}
           </Card>
         ))}
       </div>
 
       {!showForm ? (
-        <Button variant="secondary" onClick={() => setShowForm(true)}>
+        <Button variant="secondary" onClick={openAddForm}>
           + Ekipman Ekle
         </Button>
       ) : (
@@ -1240,11 +1776,13 @@ function EkipmanTab({ projectId, companyId, equipment, employees, onChange, setE
             {form.operatorSource !== 'YOK' && (
               <Input label="Operatörlük Belge No" value={form.operatorCertificateNo} onChange={(e) => setForm((f) => ({ ...f, operatorCertificateNo: e.target.value }))} />
             )}
+            <SingleFileUploader label="Ekipmana Ait Belge (Ruhsat/Periyodik Kontrol Raporu v.s.)" onUploaded={(key) => setForm((f) => ({ ...f, fileObjectKey: key }))} />
+            {form.fileObjectKey && !form.fileObjectKey.startsWith('http') && <p className="text-xs text-emerald-600">✓ Dosya seçildi.</p>}
             <div className="flex gap-2">
               <Button type="submit" disabled={submitting}>
-                {submitting ? 'Ekleniyor...' : 'Kaydet'}
+                {submitting ? 'Kaydediliyor...' : editingId ? 'Güncelle' : 'Kaydet'}
               </Button>
-              <Button type="button" variant="secondary" onClick={() => setShowForm(false)}>
+              <Button type="button" variant="secondary" onClick={closeForm}>
                 Vazgeç
               </Button>
             </div>

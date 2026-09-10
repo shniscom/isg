@@ -59,6 +59,42 @@ export function RolesPage() {
     }
   }
 
+  // Firma detayındaki "Roller & Ekipler" sekmesinin Şema görünümü, rol tiplerini bu sortOrder'a
+  // göre üstten alta dizer (bkz. CompanyDetailPage.jsx RoleOrgChart). Burada iki komşu rolün
+  // sortOrder'ını takas ederek yukarı/aşağı taşıma yapılır - aynı kategori içinde sıralanır.
+  async function moveRoleType(roleType, direction) {
+    if (!roleTypes) return;
+    const sameCategory = roleTypes.filter((rt) => rt.category === roleType.category).sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label, 'tr'));
+    const idx = sameCategory.findIndex((rt) => rt.id === roleType.id);
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (idx === -1 || swapIdx < 0 || swapIdx >= sameCategory.length) return;
+    const a = sameCategory[idx];
+    const b = sameCategory[swapIdx];
+    const aOrder = a.sortOrder ?? 0;
+    const bOrder = b.sortOrder ?? 0;
+    // sortOrder'lar eşitse (hepsi varsayılan 0 olabilir) takas anlamsız kalır; bu durumda
+    // tüm gruba sırayla 0..n atayıp sonra takas ediyoruz ki her zaman anlamlı bir sonuç olsun.
+    if (aOrder === bOrder) {
+      try {
+        await Promise.all(sameCategory.map((rt, i) => apiClient.patch(`/admin/company-role-types/${rt.id}`, { sortOrder: i })));
+        await loadRoleTypes();
+        return moveRoleType(roleType, direction);
+      } catch (err) {
+        setRoleTypesError(getErrorMessage(err));
+        return;
+      }
+    }
+    try {
+      await Promise.all([
+        apiClient.patch(`/admin/company-role-types/${a.id}`, { sortOrder: bOrder }),
+        apiClient.patch(`/admin/company-role-types/${b.id}`, { sortOrder: aOrder }),
+      ]);
+      await loadRoleTypes();
+    } catch (err) {
+      setRoleTypesError(getErrorMessage(err));
+    }
+  }
+
   useEffect(() => {
     load();
     loadRoleTypes();
@@ -323,6 +359,24 @@ export function RolesPage() {
             ) : (
               <Card key={rt.id} className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
+                  <div className="flex flex-col">
+                    <button
+                      type="button"
+                      onClick={() => moveRoleType(rt, 'up')}
+                      className="text-slate-400 hover:text-brand-700 disabled:opacity-30"
+                      title="Yukarı taşı"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => moveRoleType(rt, 'down')}
+                      className="text-slate-400 hover:text-brand-700 disabled:opacity-30"
+                      title="Aşağı taşı"
+                    >
+                      ▼
+                    </button>
+                  </div>
                   <span className="font-semibold text-slate-800">{rt.label}</span>
                   <Badge variant={rt.category === 'ACIL_EKIP' ? 'orange' : 'purple'}>{CATEGORY_LABELS[rt.category] || rt.category}</Badge>
                 </div>
@@ -338,6 +392,9 @@ export function RolesPage() {
             )
           )}
         </div>
+        <p className="text-xs text-slate-400">
+          ▲▼ ile rollerin sırasını değiştirebilirsiniz; bu sıralama, firma detayındaki "Roller & Ekipler" sekmesinin Şema görünümünde yukarıdan aşağıya doğru yansır.
+        </p>
       </section>
     </div>
   );

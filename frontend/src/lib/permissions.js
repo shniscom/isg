@@ -74,3 +74,90 @@ export const PERMISSION_CATEGORIES = [
     keys: ['insan_kaynaklari_yonetimi', 'gecici_gorevlendirme_yonetimi'],
   },
 ];
+
+// --- Göreve göre standart yetki şablonu ---------------------------------------------------
+// "Kullanıcılar" sayfasında bir kullanıcıya proje/görev ataması yapılırken (bkz.
+// UserDetailPage.jsx "Proje / Görev Atamaları"), seçilen görevin adına göre bu tablo standart
+// bir yetki setini önerir; öneri "Yetkiler" bölümündeki onay kutularına otomatik işaretlenir
+// ve admin dilerse (yetki ekleyip/çıkararak) manuel olarak değiştirebilir - hiçbir şey otomatik
+// olarak sunucuya gönderilmez, admin yine de "Yetki Ver" butonuna basmalıdır. Görev adları admin
+// tarafından serbestçe oluşturulduğu için (bkz. RolesPage.jsx "Proje Görevleri"), eşleştirme
+// anahtar kelime bazlıdır - Türkçe karakterler sadeleştirilip küçük harfe çevrilerek karşılaştırılır.
+function foldTr(value) {
+  const map = { ç: 'c', ğ: 'g', ı: 'i', ö: 'o', ş: 's', ü: 'u', İ: 'i', I: 'i' };
+  return (value || '')
+    .split('')
+    .map((ch) => map[ch] || ch)
+    .join('')
+    .toLowerCase();
+}
+
+const ROLE_PERMISSION_TEMPLATES = [
+  {
+    keywords: ['isg uzman', 'is guvenligi uzman', 'guvenlik uzman'],
+    keys: [
+      'uygunsuzluk_gorme', 'uygunsuzluk_acma', 'uygunsuzluk_duzeltme', 'uygunsuzluk_kapatma_talebi',
+      'uygunsuzluk_onaylama', 'uygunsuzluk_duzenleme', 'itiraz_sonuclandirma', 'termin_uzatma_onaylama',
+      'calisma_durdurma', 'cezai_islem', 'kaza_bildirimi', 'rapor_goruntuleme', 'rapor_alma',
+      'insan_kaynaklari_yonetimi',
+    ],
+  },
+  {
+    keywords: ['isyeri hekim', 'is yeri hekim', 'hekim', 'doktor'],
+    keys: ['uygunsuzluk_gorme', 'uygunsuzluk_acma', 'kaza_bildirimi', 'rapor_goruntuleme'],
+  },
+  {
+    keywords: ['proje muduru', 'proje yoneticisi', 'genel mudur', 'sirket yoneticisi'],
+    keys: [
+      'kullanici_yonetme', 'firma_yonetme', 'proje_yonetme', 'uygunsuzluk_gorme', 'uygunsuzluk_onaylama',
+      'itiraz_sonuclandirma', 'termin_uzatma_onaylama', 'calisma_durdurma', 'cezai_islem',
+      'rapor_goruntuleme', 'rapor_alma',
+    ],
+  },
+  {
+    keywords: ['santiye sefi', 'saha sefi', 'saha yoneticisi', 'saha muduru'],
+    keys: [
+      'uygunsuzluk_gorme', 'uygunsuzluk_acma', 'uygunsuzluk_duzeltme', 'uygunsuzluk_kapatma_talebi',
+      'itiraz_olusturma', 'termin_uzatma_talebi', 'kaza_bildirimi', 'rapor_goruntuleme',
+    ],
+  },
+  {
+    keywords: ['formen', 'usta', 'ekip lideri', 'taseron sorumlusu', 'saha sorumlusu'],
+    keys: ['uygunsuzluk_gorme', 'uygunsuzluk_duzeltme', 'uygunsuzluk_kapatma_talebi', 'itiraz_olusturma'],
+  },
+  {
+    keywords: ['kalite'],
+    keys: ['uygunsuzluk_gorme', 'uygunsuzluk_acma', 'uygunsuzluk_duzenleme', 'rapor_goruntuleme', 'rapor_alma'],
+  },
+  {
+    keywords: ['insan kaynaklari', 'ik uzmani', 'ik sorumlusu'],
+    keys: ['insan_kaynaklari_yonetimi', 'gecici_gorevlendirme_yonetimi', 'rapor_goruntuleme'],
+  },
+  {
+    keywords: ['calisan temsilcisi', 'isci temsilcisi'],
+    keys: ['uygunsuzluk_gorme', 'itiraz_olusturma'],
+  },
+  {
+    keywords: ['destek personeli', 'dsp'],
+    keys: ['uygunsuzluk_gorme', 'kaza_bildirimi'],
+  },
+  {
+    keywords: ['ilkyardim'],
+    keys: ['kaza_bildirimi'],
+  },
+];
+
+/**
+ * Verilen görev adına (roles.name) göre önerilen standart yetki anahtarlarını döner. Eşleşme
+ * bulunamazsa asgari düzeyde görüntüleme yetkisi (uygunsuzluk_gorme) önerilir - hiçbir görev için
+ * boş öneri sunulmaz, admin en azından temel görünürlükle başlayıp ekleyebilir.
+ */
+export function suggestPermissionsForRoleName(roleName) {
+  const folded = foldTr(roleName);
+  for (const template of ROLE_PERMISSION_TEMPLATES) {
+    if (template.keywords.some((kw) => folded.includes(kw))) {
+      return template.keys;
+    }
+  }
+  return ['uygunsuzluk_gorme'];
+}

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import apiClient from '../api/client';
-import { Badge } from '../components/ui';
+import { Badge, Card } from '../components/ui';
 import {
   STATUS_LABELS,
   STATUS_BADGE_VARIANT,
@@ -37,6 +37,17 @@ export function DashboardPage() {
   const [assignedItems, setAssignedItems] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [myPenalties, setMyPenalties] = useState(null);
+  const [dashboardSummary, setDashboardSummary] = useState(null);
+  const [dashboardError, setDashboardError] = useState(null);
+
+  // Yönetim özeti (proje bazlı firma/çalışan/kaza/uygunsuzluk toplamları) - admin veya
+  // proje/firma/insan kaynakları yönetimiyle ilgilenen herhangi bir yetkiye sahip kişilere
+  // gösterilir (bkz. backend admin/dashboard.routes.js VIEW_PERMISSIONS).
+  const canSeeSummary =
+    user?.isSystemAdmin ||
+    ['proje_yonetme', 'firma_yonetme', 'firma_goruntuleme', 'gecici_gorevlendirme_yonetimi', 'rapor_goruntuleme', 'kullanici_yonetme', 'insan_kaynaklari_yonetimi'].some(
+      (key) => hasPermission(key)
+    );
 
   useEffect(() => {
     if (user?.isSystemAdmin) return;
@@ -52,6 +63,15 @@ export function DashboardPage() {
       .then(({ data }) => setMyPenalties(data.penalties))
       .catch(() => setMyPenalties([]));
   }, [user]);
+
+  useEffect(() => {
+    if (!canSeeSummary) return;
+    apiClient
+      .get('/admin/dashboard-summary')
+      .then(({ data }) => setDashboardSummary(data))
+      .catch((err) => setDashboardError(err?.response?.data?.error || 'Özet yüklenemedi.'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canSeeSummary]);
 
   const counts = assignedItems
     ? {
@@ -76,6 +96,82 @@ export function DashboardPage() {
           {user?.isSystemAdmin ? 'Sistem admini olarak giriş yaptınız.' : 'Size atanan uygunsuzluklar aşağıda listelenmiştir.'}
         </p>
       </div>
+
+      {canSeeSummary && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-semibold text-slate-700">Genel Özet</h2>
+          {dashboardError && <p className="text-sm text-red-600">{dashboardError}</p>}
+          {!dashboardSummary ? (
+            <p className="text-sm text-slate-500">Yükleniyor...</p>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                  <div className="text-xl font-bold text-slate-800">{dashboardSummary.totals.projectCount}</div>
+                  <div className="text-[11px] font-medium text-slate-500">🏗️ Proje</div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                  <div className="text-xl font-bold text-slate-800">{dashboardSummary.totals.companyCount}</div>
+                  <div className="text-[11px] font-medium text-slate-500">🏢 Firma</div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                  <div className="text-xl font-bold text-slate-800">{dashboardSummary.totals.employeeCount}</div>
+                  <div className="text-[11px] font-medium text-slate-500">👷 Çalışan</div>
+                </div>
+                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5">
+                  <div className="text-xl font-bold text-red-700">{dashboardSummary.totals.kazaCount + dashboardSummary.totals.ramakKalaCount}</div>
+                  <div className="text-[11px] font-medium text-red-600">🚨 Kaza + Ramak Kala</div>
+                </div>
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+                  <div className="text-xl font-bold text-amber-700">{dashboardSummary.totals.nonconformityOpenCount}</div>
+                  <div className="text-[11px] font-medium text-amber-700">⚠️ Açık Uygunsuzluk</div>
+                </div>
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5">
+                  <div className="text-xl font-bold text-emerald-700">{dashboardSummary.totals.nonconformityClosedCount}</div>
+                  <div className="text-[11px] font-medium text-emerald-700">✅ Kapalı Uygunsuzluk</div>
+                </div>
+              </div>
+
+              {dashboardSummary.projects.length > 0 && (
+                <div className="space-y-2">
+                  {dashboardSummary.projects.map((p) => {
+                    const canOpen = hasPermission('proje_yonetme');
+                    const cardBody = (
+                      <Card className={canOpen ? 'transition hover:border-brand-300' : ''}>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-slate-800">{p.name}</span>
+                              <span className="font-mono text-[11px] text-slate-400">{p.code}</span>
+                              {p.status === 'PASIF' && <Badge variant="default">Pasif</Badge>}
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
+                              <span>🏢 {p.companyCount} firma</span>
+                              <span>👷 {p.employeeCount} çalışan</span>
+                              {(p.kazaCount > 0 || p.ramakKalaCount > 0) && (
+                                <span className="text-red-600">🚨 {p.kazaCount} kaza · ⚠️ {p.ramakKalaCount} ramak kala</span>
+                              )}
+                              <span>🔓 {p.nonconformityOpenCount} açık · 🔒 {p.nonconformityClosedCount} kapalı</span>
+                            </div>
+                          </div>
+                          {canOpen && <span className="shrink-0 text-slate-400">›</span>}
+                        </div>
+                      </Card>
+                    );
+                    return canOpen ? (
+                      <Link key={p.id} to={`/admin/projeler/${p.id}`}>
+                        {cardBody}
+                      </Link>
+                    ) : (
+                      <div key={p.id}>{cardBody}</div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {!user?.isSystemAdmin && (
         <>

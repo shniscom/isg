@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import apiClient, { getErrorMessage } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
 import { Card, Button, Select, Alert, Badge } from '../../components/ui';
-import { PERMISSION_DESCRIPTIONS, PERMISSION_CATEGORIES } from '../../lib/permissions';
+import { PERMISSION_DESCRIPTIONS, PERMISSION_CATEGORIES, suggestPermissionsForRoleName } from '../../lib/permissions';
 
 // GET /admin/users/:id recordCounts alanındaki anahtarların Türkçe etiketleri - kayıt özeti ve
 // kalıcı silme uygunluğu bu kayımlara göre belirlenir (bkz. backend getUserRecordCounts).
@@ -160,6 +160,27 @@ export function UserDetailPage() {
   async function handleRemoveAssignment(assignmentId) {
     await apiClient.delete(`/admin/users/${id}/projects/${assignmentId}`);
     await load();
+  }
+
+  // Görev seçilince, o görev için önerilen standart yetkileri aşağıdaki "Yetkiler" bölümünde
+  // otomatik işaretler (bkz. lib/permissions.js suggestPermissionsForRoleName) - admin dilerse
+  // "Yetki Ver"e basmadan önce ekleyip çıkararak manuel değiştirebilir, hiçbir şey otomatik
+  // kaydedilmez.
+  function handleAssignRoleChange(newRoleId) {
+    setAssignRoleId(newRoleId);
+    const roleObj = roles.find((r) => r.id === newRoleId);
+    if (!roleObj) {
+      setGrantPermissionIds([]);
+      return;
+    }
+    const suggestedKeys = suggestPermissionsForRoleName(roleObj.name);
+    const scopeProjectId = assignProjectId || '';
+    const alreadyGranted = new Set(
+      permissions.filter((p) => (p.projectId || null) === (scopeProjectId || null)).map((p) => p.permissionId)
+    );
+    const suggestedIds = allPermissions.filter((p) => suggestedKeys.includes(p.key) && !alreadyGranted.has(p.id)).map((p) => p.id);
+    setGrantProjectId(scopeProjectId);
+    setGrantPermissionIds(suggestedIds);
   }
 
   // Seçili kapsam (proje ya da genel) için kullanıcıya zaten verilmiş olan yetkiler,
@@ -499,7 +520,7 @@ export function UserDetailPage() {
               </Select>
             </div>
             <div className="flex-1">
-              <Select label="Görev" value={assignRoleId} onChange={(e) => setAssignRoleId(e.target.value)}>
+              <Select label="Görev" value={assignRoleId} onChange={(e) => handleAssignRoleChange(e.target.value)}>
                 <option value="">Seçiniz</option>
                 {roles.map((r) => (
                   <option key={r.id} value={r.id}>
@@ -576,6 +597,12 @@ export function UserDetailPage() {
           ))}
         </div>
         <form onSubmit={handleGrantPermission} className="space-y-4">
+          {assignRoleId && roles.find((r) => r.id === assignRoleId) && (
+            <p className="rounded-xl bg-brand-50 px-3 py-2 text-xs text-brand-800">
+              ✨ "{roles.find((r) => r.id === assignRoleId)?.name}" görevi için önerilen standart yetkiler aşağıda işaretlendi -
+              gerekirse ekleyip çıkararak değiştirebilirsiniz.
+            </p>
+          )}
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-slate-700">Verilecek Yetkiler</span>
             {grantablePermissions.length > 0 && (

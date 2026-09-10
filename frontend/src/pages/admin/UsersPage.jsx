@@ -8,6 +8,7 @@ const EMPTY_FORM = { fullName: '', username: '', phone: '', email: '' };
 
 export function UsersPage() {
   const [users, setUsers] = useState(null);
+  const [search, setSearch] = useState('');
   const [error, setError] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -230,8 +231,19 @@ export function UsersPage() {
         </Card>
       )}
 
+      {users && users.length > 0 && (
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="İsme göre ara..."
+          aria-label="Kullanıcı ara"
+        />
+      )}
+
       <div className="space-y-3">
-        {users?.map((u) => (
+        {users
+          ?.filter((u) => u.fullName?.toLocaleLowerCase('tr-TR').includes(search.trim().toLocaleLowerCase('tr-TR')))
+          .map((u) => (
           <Link key={u.id} to={`/admin/kullanicilar/${u.id}`}>
             <Card className="flex items-center justify-between transition hover:border-brand-300">
               <div>

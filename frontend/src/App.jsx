@@ -20,6 +20,7 @@ import { CompanyDetailPage } from './pages/admin/CompanyDetailPage';
 import { UsersPage } from './pages/admin/UsersPage';
 import { UserDetailPage } from './pages/admin/UserDetailPage';
 import { RolesPage } from './pages/admin/RolesPage';
+import { SpecialistsPage } from './pages/admin/SpecialistsPage';
 import { CategoriesPage } from './pages/admin/CategoriesPage';
 import { SettingsPage } from './pages/admin/SettingsPage';
 import { ArchivesPage } from './pages/admin/ArchivesPage';
@@ -127,6 +128,14 @@ function AppRoutes() {
           element={
             <PermissionRoute permission={['firma_yonetme', 'firma_goruntuleme']}>
               <CompanyDetailPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/admin/uzman-hekim"
+          element={
+            <PermissionRoute permission={['firma_yonetme', 'firma_goruntuleme', 'gecici_gorevlendirme_yonetimi', 'rapor_goruntuleme']}>
+              <SpecialistsPage />
             </PermissionRoute>
           }
         />

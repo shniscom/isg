@@ -12,6 +12,7 @@ const NAV_ITEMS = [
   { to: '/cezalar', label: 'Cezalar', icon: '⚖️', permission: 'cezai_islem' },
   { to: '/admin/projeler', label: 'Projeler', icon: '🏗️', permission: 'proje_yonetme' },
   { to: '/admin/firmalar', label: 'Firmalar', icon: '🏢', permission: ['firma_yonetme', 'firma_goruntuleme', 'gecici_gorevlendirme_yonetimi'] },
+  { to: '/admin/uzman-hekim', label: 'Uzman / Hekim', icon: '🩺', permission: ['firma_yonetme', 'firma_goruntuleme', 'gecici_gorevlendirme_yonetimi', 'rapor_goruntuleme'] },
   { to: '/admin/kullanicilar', label: 'Kullanıcılar', icon: '👤', permission: 'kullanici_yonetme' },
   { to: '/admin/gorevler', label: 'Görevler', icon: '🎯', permission: 'kullanici_yonetme' },
   { to: '/admin/onaylar', label: 'Onay Bekleyenler', icon: '✅', adminOnly: true },
