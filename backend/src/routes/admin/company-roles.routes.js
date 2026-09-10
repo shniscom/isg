@@ -2,7 +2,7 @@ const express = require('express');
 const { z } = require('zod');
 const { eq, and, inArray } = require('drizzle-orm');
 const { db } = require('../../db/client');
-const { companyRoleAssignments, companyRoleTypes, companies, employees } = require('../../db/schema');
+const { companyRoleAssignments, companyRoleTypes, companies, employees, companyRoleAssignmentBlocks, projectBlocks } = require('../../db/schema');
 const { requirePermission } = require('../../middleware/permission');
 const { asyncHandler } = require('../../utils/asyncHandler');
 const { ApiError } = require('../../utils/apiError');
@@ -77,6 +77,9 @@ const createSchema = z
     certificateStartDate: z.string().optional().nullable(),
     certificateEndDate: z.string().optional().nullable(),
     notes: z.string().optional().nullable(),
+    // Boş/verilmemiş dizi = firmanın tüm bölgelerinden sorumlu. Doluysa yalnızca seçilen
+    // bölge(ler)den sorumlu (bkz. Phase 4 madde 5 - "bölge seçimi de yapılabilmeli").
+    blockIds: z.array(z.string()).optional(),
   })
   .superRefine((data, ctx) => {
     if (data.source === 'CALISAN' && !data.employeeId && !EMPLOYEE_NOT_REQUIRED_ROLE_KEYS.has(data.roleType)) {
@@ -91,6 +94,23 @@ function toDateOrNull(value) {
   if (!value) return null;
   const d = new Date(value);
   return isNaN(d.getTime()) ? null : d;
+}
+
+/** blockIds'in verilen firmanın projesine ait olduğunu doğrular; geçersizse 400 fırlatır. */
+async function assertBlocksBelongToProject(blockIds, projectId) {
+  if (!blockIds || blockIds.length === 0) return;
+  const rows = await db.select({ id: projectBlocks.id }).from(projectBlocks).where(and(inArray(projectBlocks.id, blockIds), eq(projectBlocks.projectId, projectId)));
+  if (rows.length !== new Set(blockIds).size) {
+    throw ApiError.badRequest('Seçilen bölgelerden biri bu projeye ait değil.');
+  }
+}
+
+/** Bir rol atamasının bölge ilişkilerini verilen listeyle tamamen değiştirir (silip yeniden ekler). */
+async function replaceAssignmentBlocks(roleAssignmentId, blockIds) {
+  await db.delete(companyRoleAssignmentBlocks).where(eq(companyRoleAssignmentBlocks.roleAssignmentId, roleAssignmentId));
+  if (blockIds && blockIds.length > 0) {
+    await db.insert(companyRoleAssignmentBlocks).values(blockIds.map((blockId) => ({ roleAssignmentId, blockId })));
+  }
 }
 
 router.get(
@@ -121,7 +141,23 @@ router.get(
       .from(companyRoleAssignments)
       .leftJoin(employees, eq(companyRoleAssignments.employeeId, employees.id))
       .where(eq(companyRoleAssignments.companyId, companyId));
-    res.json({ roles: rows });
+
+    const ids = rows.map((r) => r.id);
+    let blockRows = [];
+    if (ids.length > 0) {
+      blockRows = await db
+        .select({ roleAssignmentId: companyRoleAssignmentBlocks.roleAssignmentId, blockId: companyRoleAssignmentBlocks.blockId, blockName: projectBlocks.name })
+        .from(companyRoleAssignmentBlocks)
+        .leftJoin(projectBlocks, eq(companyRoleAssignmentBlocks.blockId, projectBlocks.id))
+        .where(inArray(companyRoleAssignmentBlocks.roleAssignmentId, ids));
+    }
+    const blocksByAssignment = new Map();
+    for (const b of blockRows) {
+      if (!blocksByAssignment.has(b.roleAssignmentId)) blocksByAssignment.set(b.roleAssignmentId, []);
+      blocksByAssignment.get(b.roleAssignmentId).push({ id: b.blockId, name: b.blockName });
+    }
+    const withBlocks = rows.map((r) => ({ ...r, blocks: blocksByAssignment.get(r.id) || [] }));
+    res.json({ roles: withBlocks });
   })
 );
 
@@ -147,6 +183,8 @@ router.post(
       }
     }
 
+    await assertBlocksBelongToProject(data.blockIds, company.projectId);
+
     const [created] = await db
       .insert(companyRoleAssignments)
       .values({
@@ -167,6 +205,10 @@ router.post(
       })
       .returning();
 
+    if (data.blockIds && data.blockIds.length > 0) {
+      await replaceAssignmentBlocks(created.id, data.blockIds);
+    }
+
     if (created.source === 'CALISAN' && created.employeeId) {
       await syncEmployeeIsgRole(created.employeeId);
     }
@@ -186,6 +228,7 @@ const patchSchema = z.object({
   certificateStartDate: z.string().optional().nullable(),
   certificateEndDate: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
+  blockIds: z.array(z.string()).optional(),
 });
 
 // Bir rol atamasını düzenler - en tipik kullanımı, görevden ayrılan bir uzman/hekim/DSP için
@@ -220,7 +263,15 @@ router.patch(
     if (data.certificateEndDate !== undefined) values.certificateEndDate = toDateOrNull(data.certificateEndDate);
     if (data.notes !== undefined) values.notes = data.notes || null;
 
+    if (data.blockIds !== undefined) {
+      await assertBlocksBelongToProject(data.blockIds, company.projectId);
+    }
+
     const [updated] = await db.update(companyRoleAssignments).set(values).where(eq(companyRoleAssignments.id, req.params.id)).returning();
+
+    if (data.blockIds !== undefined) {
+      await replaceAssignmentBlocks(updated.id, data.blockIds);
+    }
 
     await logAudit({ userId: req.user.sub, action: 'COMPANY_ROLE_UPDATE', entityType: 'company_role_assignment', entityId: updated.id, details: values, ipAddress: req.ip });
     res.json({ role: updated });

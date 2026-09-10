@@ -20,6 +20,8 @@ router.use('/incidents', require('./incidents.routes'));
 router.use('/company-documents', require('./company-documents.routes'));
 router.use('/board-meetings', require('./board-meetings.routes'));
 router.use('/equipment', require('./equipment.routes'));
+router.use('/specialists', require('./specialists.routes'));
+router.use('/dashboard-summary', require('./dashboard.routes'));
 router.use('/approvals', require('./approvals.routes'));
 
 module.exports = router;

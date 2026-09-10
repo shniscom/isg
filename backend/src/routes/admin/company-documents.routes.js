@@ -12,7 +12,7 @@ const { createViewUrl } = require('../../services/storage.service');
 const router = express.Router();
 router.use(requirePermission('firma_yonetme'));
 
-const DOC_TYPES = ['RISK_ANALIZI', 'ACIL_DURUM_EYLEM_PLANI'];
+const DOC_TYPES = ['RISK_ANALIZI', 'ACIL_DURUM_EYLEM_PLANI', 'DIGER'];
 
 function toDateOrNull(value) {
   if (!value) return null;
@@ -23,6 +23,8 @@ function toDateOrNull(value) {
 const baseSchema = z.object({
   companyId: z.string().min(1),
   docType: z.enum(DOC_TYPES),
+  // docType='DIGER' seçildiğinde zorunlu; frontend'de koşullu gösterilir.
+  docTypeOther: z.string().optional().nullable(),
   preparedDate: z.string().optional().nullable(),
   approved: z.boolean().optional().default(false),
   approvedDate: z.string().optional().nullable(),
@@ -61,6 +63,7 @@ router.post(
       .values({
         companyId: data.companyId,
         docType: data.docType,
+        docTypeOther: data.docType === 'DIGER' ? data.docTypeOther || null : null,
         preparedDate: toDateOrNull(data.preparedDate),
         approved: data.approved ?? false,
         approvedDate: toDateOrNull(data.approvedDate),
@@ -87,6 +90,7 @@ router.patch(
     if ('preparedDate' in patch) patch.preparedDate = toDateOrNull(patch.preparedDate);
     if ('approvedDate' in patch) patch.approvedDate = toDateOrNull(patch.approvedDate);
     if ('validUntil' in patch) patch.validUntil = toDateOrNull(patch.validUntil);
+    if (patch.docType && patch.docType !== 'DIGER') patch.docTypeOther = null;
 
     const [updated] = await db.update(companyDocuments).set(patch).where(eq(companyDocuments.id, req.params.id)).returning();
     if (!updated) throw ApiError.notFound('Kayıt bulunamadı.');

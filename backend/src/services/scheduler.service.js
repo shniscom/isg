@@ -1,6 +1,6 @@
 const { eq, and, isNull, isNotNull, inArray } = require('drizzle-orm');
 const { db } = require('../db/client');
-const { nonconformities, archives, projects, users, notifications, employees, companies } = require('../db/schema');
+const { nonconformities, archives, projects, users, notifications, employees, companies, incidents } = require('../db/schema');
 const { createNotification, createNotifications } = require('./notification.service');
 const { loadAssigneeIdsFor } = require('./nonconformity.service');
 const { findNonconformityIdsForPeriod, previousMonthLabel } = require('./archive.service');
@@ -341,6 +341,44 @@ async function checkHealthExamExpiryReminders() {
   }
 }
 
+/**
+ * Kaza kayıtlarında girilmiş "işe dönüş tarihi" (returnToWorkDate) gelmiş/geçmişse ve daha önce
+ * bildirim gönderilmemişse admine hatırlatma gönderir - kazazede işe dönüş eğitimi almadan sahaya
+ * çıkmasın diye. Eğitim zaten verilip işaretlenmişse (returnToWorkTrainingGiven=true) bildirim
+ * gönderilmez.
+ */
+async function checkReturnToWorkReminders() {
+  try {
+    const now = new Date();
+    const candidates = await db
+      .select({ incident: incidents, companyName: companies.name, employeeFullName: employees.fullName })
+      .from(incidents)
+      .innerJoin(companies, eq(incidents.companyId, companies.id))
+      .leftJoin(employees, eq(incidents.employeeId, employees.id))
+      .where(
+        and(
+          eq(incidents.type, 'KAZA'),
+          isNotNull(incidents.returnToWorkDate),
+          eq(incidents.returnToWorkTrainingGiven, false),
+          isNull(incidents.returnToWorkReminderSentAt)
+        )
+      );
+
+    for (const { incident: inc, companyName, employeeFullName } of candidates) {
+      if (new Date(inc.returnToWorkDate).getTime() > now.getTime()) continue;
+
+      await notifyAdmins({
+        title: 'İşe dönüş eğitimi kontrolü gerekiyor',
+        message: `${employeeFullName || 'Kazazede'} (${companyName}, kayıt: ${inc.code || inc.id}) için işe dönüş tarihi geldi (${new Date(inc.returnToWorkDate).toLocaleDateString('tr-TR')}). İşe dönüş eğitimi verilmeden sahaya çıkmamalı - kaza kaydından işaretleyin.`,
+      });
+
+      await db.update(incidents).set({ returnToWorkReminderSentAt: now }).where(eq(incidents.id, inc.id));
+    }
+  } catch (err) {
+    console.error('[scheduler] İşe dönüş eğitimi uyarı kontrolü başarısız:', err.message);
+  }
+}
+
 function startScheduler() {
   checkDeadlineReminders();
   checkDeadlineExpirations();
@@ -349,6 +387,7 @@ function startScheduler() {
   checkTempAssignmentEndedAndArchive();
   checkTrainingExpiryReminders();
   checkHealthExamExpiryReminders();
+  checkReturnToWorkReminders();
   return setInterval(() => {
     checkDeadlineReminders();
     checkDeadlineExpirations();
@@ -357,6 +396,7 @@ function startScheduler() {
     checkTempAssignmentEndedAndArchive();
     checkTrainingExpiryReminders();
     checkHealthExamExpiryReminders();
+    checkReturnToWorkReminders();
   }, CHECK_INTERVAL_MS);
 }
 
@@ -369,4 +409,5 @@ module.exports = {
   checkTempAssignmentEndedAndArchive,
   checkTrainingExpiryReminders,
   checkHealthExamExpiryReminders,
+  checkReturnToWorkReminders,
 };

@@ -7,6 +7,7 @@ const { requirePermission } = require('../../middleware/permission');
 const { asyncHandler } = require('../../utils/asyncHandler');
 const { ApiError } = require('../../utils/apiError');
 const { logAudit } = require('../../utils/audit');
+const { createViewUrl } = require('../../services/storage.service');
 
 const router = express.Router();
 router.use(requirePermission('firma_yonetme'));
@@ -40,6 +41,7 @@ const baseSchema = z.object({
   operatorOutsideNationalId: z.string().optional().nullable(),
   operatorOutsideSgkNo: z.string().optional().nullable(),
   operatorCertificateNo: z.string().optional().nullable(),
+  fileObjectKey: z.string().optional().nullable(),
 });
 
 const updateSchema = baseSchema.partial().omit({ projectId: true, companyId: true });
@@ -67,6 +69,7 @@ const EQUIPMENT_SELECT = {
   operatorOutsideNationalId: equipment.operatorOutsideNationalId,
   operatorOutsideSgkNo: equipment.operatorOutsideSgkNo,
   operatorCertificateNo: equipment.operatorCertificateNo,
+  fileObjectKey: equipment.fileObjectKey,
   createdAt: equipment.createdAt,
 };
 
@@ -86,7 +89,10 @@ router.get(
       .leftJoin(employees, eq(equipment.assignedEmployeeId, employees.id))
       .where(and(...conditions))
       .orderBy(desc(equipment.createdAt));
-    res.json({ equipment: rows });
+    const withUrls = await Promise.all(
+      rows.map(async (r) => ({ ...r, fileViewUrl: r.fileObjectKey ? await createViewUrl(r.fileObjectKey).catch(() => null) : null }))
+    );
+    res.json({ equipment: withUrls });
   })
 );
 
@@ -122,6 +128,7 @@ router.post(
         operatorOutsideNationalId: data.operatorSource === 'DISARIDAN' ? data.operatorOutsideNationalId || null : null,
         operatorOutsideSgkNo: data.operatorSource === 'DISARIDAN' ? data.operatorOutsideSgkNo || null : null,
         operatorCertificateNo: data.operatorCertificateNo || null,
+        fileObjectKey: data.fileObjectKey || null,
         createdById: req.user.sub,
       })
       .returning();

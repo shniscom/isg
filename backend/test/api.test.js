@@ -3806,3 +3806,178 @@ test('geçici görevlendirme firmaları: düzenlenebiliyor ve silinebiliyor (gec
   const afterDelete = await api('GET', `/admin/companies/${tempCompanyId}`, { token: adminToken });
   assert.equal(afterDelete.body.company.isActive, false);
 });
+
+test('uzman/hekim özet sayfası: firma/çalışan/tehlike sınıfı toplamları ve mevzuata göre asgari aylık süre doğru hesaplanıyor', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Uzman Özet Test Projesi', code: 'TST-044' } });
+  const projectId = proj.body.project.id;
+
+  const companyTehlikeli = await api('POST', '/admin/companies', {
+    token: adminToken,
+    body: { projectId, name: 'Tehlikeli Sınıf Firması', type: 'TASERON', dangerClass: 'TEHLIKELI' },
+  });
+  const companyTehlikeliId = companyTehlikeli.body.company.id;
+  const companyAz = await api('POST', '/admin/companies', {
+    token: adminToken,
+    body: { projectId, name: 'Az Tehlikeli Sınıf Firması', type: 'TASERON', dangerClass: 'AZ_TEHLIKELI' },
+  });
+  const companyAzId = companyAz.body.company.id;
+
+  // Tehlikeli sınıf firmasına 3 aktif çalışan ekle.
+  for (let i = 0; i < 3; i++) {
+    const empRes = await api('POST', '/employees', {
+      token: adminToken,
+      body: {
+        projectId,
+        companyId: companyTehlikeliId,
+        fullName: `Tehlikeli Çalışan ${i}`,
+        nationalId: `9999999995${i}`,
+        position: 'İşçi',
+        startDate: '2025-01-01',
+      },
+    });
+    assert.equal(empRes.status, 201);
+  }
+
+  // Tehlikeli sınıf firmasına C Sınıfı bir İSG uzmanı ata - C sınıfı yalnızca az tehlikeliye
+  // bakabildiği için bu, sınıf uygunluğu açısından YETERSİZ sayılmalı.
+  const specialistC = await api('POST', '/admin/company-roles', {
+    token: adminToken,
+    body: {
+      companyId: companyTehlikeliId,
+      roleType: 'ISG_UZMANI',
+      source: 'DISARIDAN',
+      outsideFullName: 'Yetersiz Sınıf Uzmanı',
+      certificateNo: 'ISG-100',
+      certificateClass: 'C Sınıfı',
+      certificateStartDate: '2025-03-01',
+    },
+  });
+  assert.equal(specialistC.status, 201);
+
+  // Az tehlikeli firmaya 2 aktif çalışan ve B Sınıfı bir İSG uzmanı ata (yeterli olmalı).
+  for (let i = 0; i < 2; i++) {
+    const empRes = await api('POST', '/employees', {
+      token: adminToken,
+      body: {
+        projectId,
+        companyId: companyAzId,
+        fullName: `Az Tehlikeli Çalışan ${i}`,
+        nationalId: `9999999996${i}`,
+        position: 'İşçi',
+        startDate: '2025-01-01',
+      },
+    });
+    assert.equal(empRes.status, 201);
+  }
+  const specialistB = await api('POST', '/admin/company-roles', {
+    token: adminToken,
+    body: {
+      companyId: companyAzId,
+      roleType: 'ISG_UZMANI',
+      source: 'DISARIDAN',
+      outsideFullName: 'Yeterli Sınıf Uzmanı',
+      certificateNo: 'ISG-101',
+      certificateClass: 'B Sınıfı',
+      certificateStartDate: '2025-02-01',
+    },
+  });
+  assert.equal(specialistB.status, 201);
+
+  const res = await api('GET', '/admin/specialists?type=ISG_UZMANI', { token: adminToken });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.type, 'ISG_UZMANI');
+
+  const yetersiz = res.body.people.find((p) => p.fullName === 'Yetersiz Sınıf Uzmanı');
+  assert.ok(yetersiz, 'C sınıfı uzman listede bulunamadı');
+  assert.equal(yetersiz.companyCount, 1);
+  assert.equal(yetersiz.totalEmployees, 3);
+  assert.equal(yetersiz.dangerClassEmployeeCounts.TEHLIKELI, 3);
+  // Tehlikeli sınıf: çalışan başına ayda 20 dakika x 3 çalışan = 60 dakika.
+  assert.equal(yetersiz.requiredMonthlyMinutes, 60);
+  assert.equal(yetersiz.classAdequacy.adequate, false);
+  assert.equal(yetersiz.classAdequacy.uncoveredCompanies.length, 1);
+  assert.equal(yetersiz.classAdequacy.uncoveredCompanies[0].companyId, companyTehlikeliId);
+
+  const yeterli = res.body.people.find((p) => p.fullName === 'Yeterli Sınıf Uzmanı');
+  assert.ok(yeterli, 'B sınıfı uzman listede bulunamadı');
+  assert.equal(yeterli.companyCount, 1);
+  assert.equal(yeterli.totalEmployees, 2);
+  // Az tehlikeli sınıf: çalışan başına ayda 10 dakika x 2 çalışan = 20 dakika.
+  assert.equal(yeterli.requiredMonthlyMinutes, 20);
+  assert.equal(yeterli.classAdequacy.adequate, true);
+
+  // Sayfa üstü toplam özet: iki firma da bu projede en az bir aktif ISG_UZMANI atamasına sahip.
+  assert.equal(res.body.summary.dangerClassCompanyCounts.TEHLIKELI, 1);
+  assert.equal(res.body.summary.dangerClassCompanyCounts.AZ_TEHLIKELI, 1);
+  assert.equal(res.body.summary.dangerClassEmployeeCounts.TEHLIKELI, 3);
+  assert.equal(res.body.summary.dangerClassEmployeeCounts.AZ_TEHLIKELI, 2);
+  assert.equal(res.body.summary.requiredMonthlyMinutes, 80);
+
+  // İşyeri hekimi tipi ayrı listelenir ve bu iki uzman onun listesinde görünmemeli.
+  const hekimRes = await api('GET', '/admin/specialists?type=ISYERI_HEKIMI', { token: adminToken });
+  assert.equal(hekimRes.status, 200);
+  assert.ok(!hekimRes.body.people.some((p) => p.fullName === 'Yetersiz Sınıf Uzmanı'));
+
+  // Geçersiz tip 400 dönmeli.
+  const badType = await api('GET', '/admin/specialists?type=GECERSIZ', { token: adminToken });
+  assert.equal(badType.status, 400);
+});
+
+test('ana sayfa özet: proje bazlı firma/çalışan/kaza/uygunsuzluk toplamları doğru hesaplanıyor', async () => {
+  const proj = await api('POST', '/admin/projects', { token: adminToken, body: { name: 'Dashboard Özet Test Projesi', code: 'TST-045' } });
+  const projectId = proj.body.project.id;
+  const company = await api('POST', '/admin/companies', { token: adminToken, body: { projectId, name: 'Dashboard Test Firması', type: 'TASERON' } });
+  const companyId = company.body.company.id;
+
+  const emp1 = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId, fullName: 'Dashboard Çalışanı 1', nationalId: '99999999971', position: 'İşçi', startDate: '2025-01-01' },
+  });
+  assert.equal(emp1.status, 201);
+  const emp2 = await api('POST', '/employees', {
+    token: adminToken,
+    body: { projectId, companyId, fullName: 'Dashboard Çalışanı 2', nationalId: '99999999972', position: 'İşçi', startDate: '2025-01-01' },
+  });
+  assert.equal(emp2.status, 201);
+
+  const incident = await api('POST', '/admin/incidents', {
+    token: adminToken,
+    body: {
+      companyId,
+      type: 'KAZA',
+      eventDateTime: '2026-01-10T09:00:00.000Z',
+      employeeId: emp1.body.employee.id,
+      eventDescription: 'Test kazası',
+    },
+  });
+  assert.equal(incident.status, 201);
+
+  // Uygunsuzluk oluşturma API'si atanan kişinin projeye kayıtlı aktif bir üye olmasını
+  // gerektiriyor (ayrı bir kullanıcı+atama akışı kurmak bu testin kapsamı dışında); bu yüzden
+  // dashboard özetinin doğru saydığını doğrulamak için satır doğrudan eklenir.
+  const adminUserId = JSON.parse(Buffer.from(adminToken.split('.')[1], 'base64url').toString()).sub;
+  await db.insert(schema.nonconformities).values({
+    number: `DASH-TEST-${Date.now()}`,
+    projectId,
+    companyId,
+    openedById: adminUserId,
+    description: 'Dashboard test uygunsuzluğu',
+    priority: 'ORTA',
+    status: 'ACIK',
+    dueDate: new Date('2030-01-01'),
+  });
+
+  const res = await api('GET', '/admin/dashboard-summary', { token: adminToken });
+  assert.equal(res.status, 200);
+  const projectSummary = res.body.projects.find((p) => p.id === projectId);
+  assert.ok(projectSummary, 'proje özet listesinde bulunamadı');
+  assert.equal(projectSummary.companyCount, 1);
+  assert.equal(projectSummary.employeeCount, 2);
+  assert.equal(projectSummary.kazaCount, 1);
+  assert.equal(projectSummary.nonconformityOpenCount, 1);
+  assert.equal(projectSummary.nonconformityClosedCount, 0);
+
+  assert.ok(res.body.totals.projectCount >= 1);
+  assert.ok(res.body.totals.companyCount >= 1);
+  assert.ok(res.body.totals.employeeCount >= 2);
+});

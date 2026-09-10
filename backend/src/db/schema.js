@@ -55,7 +55,7 @@ const archiveStatusEnum = pgEnum('archive_status', ['OLUSTURULDU', 'SILINDI']);
 // dinamik bir tablo (company_role_types) haline getirildi; bkz. aşağıdaki companyRoleTypes.
 const companyRoleSourceEnum = pgEnum('company_role_source', ['CALISAN', 'DISARIDAN']);
 const incidentTypeEnum = pgEnum('incident_type', ['KAZA', 'RAMAK_KALA']);
-const companyDocTypeEnum = pgEnum('company_doc_type', ['RISK_ANALIZI', 'ACIL_DURUM_EYLEM_PLANI']);
+const companyDocTypeEnum = pgEnum('company_doc_type', ['RISK_ANALIZI', 'ACIL_DURUM_EYLEM_PLANI', 'DIGER']);
 const dangerClassEnum = pgEnum('danger_class', ['COK_TEHLIKELI', 'TEHLIKELI', 'AZ_TEHLIKELI']);
 const equipmentAssignedToEnum = pgEnum('equipment_assigned_to', ['FIRMA', 'KISI']);
 const equipmentOperatorSourceEnum = pgEnum('equipment_operator_source', ['CALISAN', 'DISARIDAN', 'YOK']);
@@ -555,12 +555,32 @@ const companyRoleAssignments = pgTable('company_role_assignments', {
 ]);
 
 /**
+ * Bir rol atamasının hangi bölge(ler)den/blok(lar)dan sorumlu olduğunu belirtir (çoktan çoğa) -
+ * companyBlocks ile aynı desen. Örn. "A Uzmanı" firmanın hem "1. Parsel" hem "2. Parsel"
+ * bölgelerinden sorumlu olabilir; hiç satırı yoksa (boş) firmanın tüm bölgelerinden sorumlu
+ * kabul edilir - "Tüm Bölgeler" anlamına gelir (bkz. Phase 4 madde 5).
+ */
+const companyRoleAssignmentBlocks = pgTable('company_role_assignment_blocks', {
+  id: text('id').primaryKey().$defaultFn(genId),
+  roleAssignmentId: text('role_assignment_id').notNull().references(() => companyRoleAssignments.id, { onDelete: 'cascade' }),
+  blockId: text('block_id').notNull().references(() => projectBlocks.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('company_role_assignment_blocks_unique_idx').on(table.roleAssignmentId, table.blockId),
+  index('company_role_assignment_blocks_block_idx').on(table.blockId),
+]);
+
+/**
  * Kaza ve ramak kala olay kayıtları. Mevzuata uygun temel alanları taşır. Ramak kala
  * olaylarında kazazede/hastane/rapor alanları genelde boş bırakılır.
  */
 const incidents = pgTable('incidents', {
   id: text('id').primaryKey().$defaultFn(genId),
   companyId: text('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
+  // Firma bazlı sıralı kayıt kodu (ör. "ABC-KZ-2026-001") - oluşturulduğunda bir kere üretilir,
+  // sonradan değişmez (bkz. incidents.routes.js generateIncidentCode). Firma adının ilk 3 harfi +
+  // tür kısaltması (KZ/RK) + yıl + o firma/tür/yıl için sıra no.
+  code: text('code'),
   type: incidentTypeEnum('type').notNull(),
   eventDateTime: timestamp('event_date_time', { withTimezone: true }).notNull(),
   employeeId: text('employee_id').references(() => employees.id, { onDelete: 'set null' }), // kazayı geçiren çalışan
@@ -572,16 +592,33 @@ const incidents = pgTable('incidents', {
   referredToHospital: boolean('referred_to_hospital').notNull().default(false),
   hospitalName: text('hospital_name'),
   firstAidGiven: boolean('first_aid_given').notNull().default(false),
+  // İlk yardım müdahalesini yapan kişi - firma rolü kaydından (DSP veya İlkyardımcı, bkz.
+  // company_role_assignments) seçilmişse firstAidGivenById dolu olur; "Diğer" seçilip serbest
+  // girilmişse firstAidGivenByOutside* alanları kullanılır. firstAidGivenBy her durumda
+  // gösterilecek ada sahip olur (seçimden türetilir ya da doğrudan yazılır) - eski kayıtlarla
+  // geriye dönük uyumluluk ve basit listeleme için.
   firstAidGivenBy: text('first_aid_given_by'),
+  firstAidGivenById: text('first_aid_given_by_id').references(() => companyRoleAssignments.id, { onDelete: 'set null' }),
+  firstAidGivenByOutsideNationalId: text('first_aid_given_by_outside_national_id'),
+  firstAidGivenByOutsidePhone: text('first_aid_given_by_outside_phone'),
+  firstAidGivenByOutsideCompanyName: text('first_aid_given_by_outside_company_name'),
   victimProfession: text('victim_profession'),
   doctorReportPhotoKey: text('doctor_report_photo_key'), // R2 object key
   reportDaysOff: integer('report_days_off'),
   returnToWorkDate: timestamp('return_to_work_date', { withTimezone: true }),
+  // İşe dönüş eğitimi: kazazede rapor sonrası sahaya dönmeden önce mevzuat gereği bu eğitim
+  // verilmelidir. returnToWorkDate geldiğinde admin'e bildirim gider (bkz. scheduler.service.js
+  // checkReturnToWorkReminders), eğitim verilip işaretlenince tekrar hatırlatılmaz.
+  returnToWorkTrainingGiven: boolean('return_to_work_training_given').notNull().default(false),
+  returnToWorkTrainingTopic: text('return_to_work_training_topic'),
+  returnToWorkTrainingDuration: text('return_to_work_training_duration'), // serbest metin, ör. "2 saat"
+  returnToWorkReminderSentAt: timestamp('return_to_work_reminder_sent_at', { withTimezone: true }),
   actionsTaken: text('actions_taken'),
   createdById: text('created_by_id').notNull().references(() => users.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index('incidents_company_idx').on(table.companyId, table.type),
+  uniqueIndex('incidents_code_idx').on(table.code),
 ]);
 
 /**
@@ -591,6 +628,8 @@ const companyDocuments = pgTable('company_documents', {
   id: text('id').primaryKey().$defaultFn(genId),
   companyId: text('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
   docType: companyDocTypeEnum('doc_type').notNull(),
+  // docType='DIGER' seçildiğinde serbest metinle belge adı (ör. "Yıllık Eğitim Planı").
+  docTypeOther: text('doc_type_other'),
   preparedDate: timestamp('prepared_date', { withTimezone: true }),
   approved: boolean('approved').notNull().default(false),
   approvedDate: timestamp('approved_date', { withTimezone: true }),
@@ -647,6 +686,7 @@ const equipment = pgTable('equipment', {
   operatorOutsideNationalId: text('operator_outside_national_id'),
   operatorOutsideSgkNo: text('operator_outside_sgk_no'),
   operatorCertificateNo: text('operator_certificate_no'),
+  fileObjectKey: text('file_object_key'), // ekipmana ait belge (ruhsat, periyodik kontrol raporu v.s.) - R2 object key
   createdById: text('created_by_id').notNull().references(() => users.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -752,6 +792,18 @@ const companyBlocksRelations = relations(companyBlocks, ({ one }) => ({
 
 const companyRoleTypesRelations = relations(companyRoleTypes, ({ many }) => ({
   assignments: many(companyRoleAssignments),
+}));
+
+const companyRoleAssignmentsRelations = relations(companyRoleAssignments, ({ one, many }) => ({
+  company: one(companies, { fields: [companyRoleAssignments.companyId], references: [companies.id] }),
+  roleTypeRef: one(companyRoleTypes, { fields: [companyRoleAssignments.roleType], references: [companyRoleTypes.key] }),
+  employee: one(employees, { fields: [companyRoleAssignments.employeeId], references: [employees.id] }),
+  blocks: many(companyRoleAssignmentBlocks),
+}));
+
+const companyRoleAssignmentBlocksRelations = relations(companyRoleAssignmentBlocks, ({ one }) => ({
+  roleAssignment: one(companyRoleAssignments, { fields: [companyRoleAssignmentBlocks.roleAssignmentId], references: [companyRoleAssignments.id] }),
+  block: one(projectBlocks, { fields: [companyRoleAssignmentBlocks.blockId], references: [projectBlocks.id] }),
 }));
 
 const rolesRelations = relations(roles, ({ many }) => ({
@@ -907,6 +959,7 @@ module.exports = {
   companyBlocks,
   companyRoleTypes,
   companyRoleAssignments,
+  companyRoleAssignmentBlocks,
   incidents,
   companyDocuments,
   boardMeetings,
@@ -919,6 +972,8 @@ module.exports = {
   companyUsersRelations,
   companyBlocksRelations,
   companyRoleTypesRelations,
+  companyRoleAssignmentsRelations,
+  companyRoleAssignmentBlocksRelations,
   rolesRelations,
   permissionsRelations,
   userProjectsRelations,
