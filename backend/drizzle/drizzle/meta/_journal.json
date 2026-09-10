@@ -1,0 +1,181 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1786534909420,
+      "tag": "0000_stormy_doorman",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786544596745,
+      "tag": "0001_wakeful_gwen_stacy",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786796042269,
+      "tag": "0002_steady_monster_badoon",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786796187595,
+      "tag": "0003_dazzling_screwball",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787053956528,
+      "tag": "0004_glamorous_ikaris",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787058198289,
+      "tag": "0005_goofy_reptil",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787394462207,
+      "tag": "0006_brainy_wallflower",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787395366385,
+      "tag": "0007_neat_bromley",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787664570884,
+      "tag": "0008_employees_isg_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787818700389,
+      "tag": "0009_user_projects_block_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787820603347,
+      "tag": "0010_archives",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1787999445114,
+      "tag": "0011_company_safety_expansion",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788010602904,
+      "tag": "0012_user_appearance_prefs",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1788179208343,
+      "tag": "0013_bolge_ve_firma_rolu_genisletme",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1788183428023,
+      "tag": "0014_pending_approvals",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1788186816713,
+      "tag": "0015_users_employee_link",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1788192220597,
+      "tag": "0016_employee_employment_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1788206036040,
+      "tag": "0017_temporary_assignment_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1788339916784,
+      "tag": "0018_employee_health_training_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1788520035048,
+      "tag": "0019_drop_employee_free_text_specialist_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1788520042072,
+      "tag": "0020_employee_specialist_assignment_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1789079943280,
+      "tag": "0021_incident_code_and_return_to_work",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1789080289585,
+      "tag": "0022_company_document_other_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1789080408026,
+      "tag": "0023_equipment_file_attachment",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1789080874297,
+      "tag": "0024_company_role_assignment_blocks",
+      "breakpoints": true
+    }
+  ]
+}

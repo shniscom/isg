@@ -1,0 +1,1 @@
+ALTER TABLE "equipment" ADD COLUMN "file_object_key" text;
