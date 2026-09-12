@@ -39,11 +39,11 @@ export function AppearancePage() {
                   style={{ background: `linear-gradient(135deg, ${t.swatch[0]}, ${t.swatch[1]})` }}
                 />
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 font-semibold text-slate-800">
+                  <div className={`flex items-center gap-1.5 font-semibold ${selected ? 'text-brand-900' : 'text-slate-800'}`}>
                     {t.label}
                     {selected && <span className="text-brand-600">✓</span>}
                   </div>
-                  <div className="text-xs text-slate-500">{t.description}</div>
+                  <div className={`text-xs ${selected ? 'text-brand-700' : 'text-slate-500'}`}>{t.description}</div>
                 </div>
               </button>
             );
@@ -84,8 +84,8 @@ export function AppearancePage() {
             >
               <span className="mt-0.5">{buttonDensity === d.key ? '🔘' : '⚪'}</span>
               <div>
-                <div className="font-medium text-slate-800">{d.label}</div>
-                <div className="text-xs text-slate-500">{d.description}</div>
+                <div className={`font-medium ${buttonDensity === d.key ? 'text-brand-900' : 'text-slate-800'}`}>{d.label}</div>
+                <div className={`text-xs ${buttonDensity === d.key ? 'text-brand-700' : 'text-slate-500'}`}>{d.description}</div>
               </div>
             </button>
           ))}

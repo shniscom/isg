@@ -92,7 +92,7 @@ export function NonconformityCompanyCardsPage() {
             <Card className="border-2 border-brand-200 bg-brand-50/40 transition hover:border-brand-400 hover:shadow-md">
               <div className="flex items-center gap-2">
                 <span className="text-xl">📋</span>
-                <span className="text-lg font-bold text-slate-800">Genel</span>
+                <span className="text-lg font-bold text-brand-900">Genel</span>
                 <Badge variant="info">Tüm görebildiğiniz kayıtlar</Badge>
               </div>
               <SummaryBadges

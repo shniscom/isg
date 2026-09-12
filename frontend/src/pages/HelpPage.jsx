@@ -535,8 +535,8 @@ export function HelpPage() {
             >
               <span className="text-lg leading-none">{topic.icon}</span>
               <span>
-                <span className="block text-sm font-semibold text-slate-800">{topic.title}</span>
-                <span className="block text-xs text-slate-500">{topic.summary}</span>
+                <span className={`block text-sm font-semibold ${selectedTopic.id === topic.id ? 'text-brand-900' : 'text-slate-800'}`}>{topic.title}</span>
+                <span className={`block text-xs ${selectedTopic.id === topic.id ? 'text-brand-700' : 'text-slate-500'}`}>{topic.summary}</span>
               </span>
             </button>
           ))}
