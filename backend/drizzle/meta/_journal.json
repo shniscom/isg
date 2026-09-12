@@ -148,6 +148,34 @@
       "when": 1788520042072,
       "tag": "0020_employee_specialist_assignment_links",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1789079943280,
+      "tag": "0021_incident_code_and_return_to_work",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1789080289585,
+      "tag": "0022_company_document_other_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1789080408026,
+      "tag": "0023_equipment_file_attachment",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1789080874297,
+      "tag": "0024_company_role_assignment_blocks",
+      "breakpoints": true
     }
   ]
 }
